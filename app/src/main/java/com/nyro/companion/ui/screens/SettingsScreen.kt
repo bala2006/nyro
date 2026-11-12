@@ -105,7 +105,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         SectionLabel("Safety & privacy")
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
             Column {
-                Toggle("Confirm medium-risk actions", "Ask before sending, sharing, posting or changing settings. High-risk actions (payments, purchases, deletion, security) always ask.", s.confirmMediumRisk) { v -> upd { it.copy(confirmMediumRisk = v) } }
+                Toggle("Confirm medium-risk actions", "Ask before sending, sharing, posting or changing settings, unless your request already asked for it (\u201csend hello to Pranav\u201d sends without asking again). High-risk actions (payments, purchases, deletion, security) always ask.", s.confirmMediumRisk) { v -> upd { it.copy(confirmMediumRisk = v) } }
                 Toggle("Allow screenshots for vision", "Lets NYRO send a screenshot to your Azure endpoint when accessibility info isn't enough. A notice appears every time.", s.allowScreenshots) { v -> upd { it.copy(allowScreenshots = v) } }
             }
         }
@@ -119,7 +119,11 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
                     TextButton(onClick = { clear = "conversations" }) { Text("Clear conversations", color = Nyro.Danger) }
                     TextButton(onClick = { clear = "task history" }) { Text("Clear tasks", color = Nyro.Danger) }
                 }
-                TextButton(onClick = { clear = "memories" }) { Text("Clear memories", color = Nyro.Danger) }
+                Row {
+                    TextButton(onClick = { clear = "memories" }) { Text("Clear memories", color = Nyro.Danger) }
+                    val usage by g.usage.state.collectAsStateWithLifecycle()
+                    TextButton(onClick = { g.usage.reset() }) { Text("Reset token count (${com.nyro.companion.agent.UsageMeter.fmt(usage.total)})", color = Nyro.TextMid) }
+                }
             }
         }
 

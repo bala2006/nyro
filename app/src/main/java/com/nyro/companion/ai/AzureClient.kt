@@ -49,7 +49,21 @@ data class AiTurn(
     val api: WireKind = WireKind.CHAT,
     /** Responses API only: the raw output items (reasoning, function_call, message) to replay next turn. */
     val rawItems: JsonArray? = null,
+    val usage: Usage? = null,
 )
+
+data class Usage(val input: Long, val output: Long, val total: Long)
+
+private fun JsonObject.long(k: String): Long = (this[k] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L
+
+/** Reads both shapes: chat (prompt/completion_tokens) and responses (input/output_tokens). */
+internal fun usageOf(u: JsonObject?): Usage? {
+    u ?: return null
+    val input = u.long("prompt_tokens").takeIf { it > 0 } ?: u.long("input_tokens")
+    val output = u.long("completion_tokens").takeIf { it > 0 } ?: u.long("output_tokens")
+    val total = u.long("total_tokens").takeIf { it > 0 } ?: (input + output)
+    return if (total <= 0) null else Usage(input, output, total)
+}
 
 enum class WireKind { CHAT, RESPONSES }
 
@@ -225,7 +239,7 @@ class AzureClient(
             cfg.reasoningEffort.isNotBlank() -> put("reasoning_effort", cfg.reasoningEffort)
         }
         if (maxTokens != null) put("max_tokens", maxTokens)
-        if (stream) put("stream", true)
+        if (stream) { put("stream", true); put("stream_options", buildJsonObject { put("include_usage", true) }) }
     }
 
     /** Translates Chat-shaped history into Responses input items (stateless: store=false). */
@@ -312,10 +326,12 @@ class AzureClient(
         var emitted = false
         val delta: ((String) -> Unit)? = onDelta?.let { cb -> { d: String -> emitted = true; cb(d) } }
         var dropInclude = false
+        var dropStreamOptions = false
         while (true) {
             attempt++
             var b = body(stream)
             if (dropInclude) b = JsonObject(b - "include")
+            if (dropStreamOptions) b = JsonObject(b - "stream_options")
             val req = Request.Builder()
                 .url(if (wire == WireKind.RESPONSES) responsesUrlFor(cfg) else urlFor(cfg, deployment))
                 .header("api-key", key)
@@ -339,6 +355,7 @@ class AzureClient(
                 if (wire == WireKind.RESPONSES && !dropInclude && e.httpCode == 400 && (msg.contains("include", true) || msg.contains("encrypted_content", true))) {
                     dropInclude = true; continue // model without reasoning items
                 }
+                if (!dropStreamOptions && e.httpCode == 400 && msg.contains("stream_options", true)) { dropStreamOptions = true; continue }
                 val retryable = (e.kind == AiErrorKind.RATE_LIMIT && e.retryAfterSec in 0..12) || e.kind == AiErrorKind.SERVER
                 if (stream && e.kind == AiErrorKind.BAD_REQUEST && msg.contains("stream", true) && !msg.contains("/responses", true)) {
                     stream = false; continue // deployment rejects streaming: fall back to a single response
@@ -411,6 +428,7 @@ class AzureClient(
             model = obj.str("model"),
             api = WireKind.RESPONSES,
             rawItems = output,
+            usage = usageOf(obj["usage"] as? JsonObject),
         )
     }
 
@@ -420,6 +438,7 @@ class AzureClient(
         val calls = sortedMapOf<Int, Triple<StringBuilder, StringBuilder, StringBuilder>>() // id, name, args
         var finish: String? = null
         var model: String? = null
+        var usage: Usage? = null
         val ctx = kotlin.coroutines.coroutineContext
         while (true) {
             ctx.ensureActive()
@@ -429,7 +448,8 @@ class AzureClient(
             if (data == "[DONE]") break
             if (data.isEmpty()) continue
             val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
-            obj["error"]?.let { throw mapHttpError(500, data, null) }
+            obj["error"]?.let { throw mapHttpError(400, data, null) }
+            usageOf(obj["usage"] as? JsonObject)?.let { usage = it }
             obj.str("model")?.takeIf { it.isNotBlank() }?.let { model = it }
             val choices = obj["choices"] as? JsonArray ?: continue
             for (ch in choices) {
@@ -453,7 +473,7 @@ class AzureClient(
         val toolCalls = calls.values.mapIndexed { i, (id, name, args) ->
             ToolCall(id.toString().ifEmpty { "call_$i" }, name.toString(), args.toString().ifBlank { "{}" })
         }.filter { it.name.isNotBlank() }
-        return AiTurn(content.toString(), toolCalls, finish, model)
+        return AiTurn(content.toString(), toolCalls, finish, model, usage = usage)
     }
 
     private fun readFull(text: String): AiTurn {
@@ -470,7 +490,7 @@ class AzureClient(
             val f = tc["function"]?.jsonObject ?: return@mapIndexedNotNull null
             ToolCall(tc.str("id") ?: "call_$i", f.str("name") ?: return@mapIndexedNotNull null, f.str("arguments") ?: "{}")
         }.orEmpty()
-        return AiTurn(msg?.str("content").orEmpty(), calls, finish, obj.str("model"))
+        return AiTurn(msg?.str("content").orEmpty(), calls, finish, obj.str("model"), usage = usageOf(obj["usage"] as? JsonObject))
     }
 
     // ---------- Connection test ----------

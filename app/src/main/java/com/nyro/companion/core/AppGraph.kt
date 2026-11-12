@@ -37,6 +37,7 @@ class AppGraph(val app: Application) {
     val apps = AppCatalog(app)
     val tools = ToolRegistry()
     val voice = VoiceEngine(app, settings)
+    val usage = com.nyro.companion.agent.UsageMeter(app)
     val agent = Agent(this)
     val mode = ModeController(this)
 

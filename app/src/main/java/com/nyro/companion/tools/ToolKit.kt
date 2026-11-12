@@ -132,4 +132,41 @@ object SensitiveUi {
     }
 
     fun isFinancial(pkg: String) = sensitivePkg.containsMatchIn(pkg)
+
+    /** Words in the user's request that count as explicitly asking for a given action verb. */
+    private val synonyms = mapOf(
+        "send" to listOf("send", "text", "message", "msg", "tell", "reply", "dm", "say"),
+        "reply" to listOf("reply", "respond", "answer", "send", "tell", "text"),
+        "share" to listOf("share", "send"),
+        "post" to listOf("post", "publish", "upload", "tweet", "share"),
+        "publish" to listOf("publish", "post"),
+        "upload" to listOf("upload", "post", "send"),
+        "submit" to listOf("submit", "send", "fill"),
+        "call" to listOf("call", "ring", "dial", "phone"),
+        "forward" to listOf("forward", "send", "share"),
+        "follow" to listOf("follow"), "unfollow" to listOf("unfollow"),
+        "save" to listOf("save"), "apply" to listOf("apply"),
+        "install" to listOf("install", "download"),
+        "enable" to listOf("enable", "turn on", "switch on", "activate"),
+        "disable" to listOf("disable", "turn off", "switch off", "deactivate"),
+        "archive" to listOf("archive"), "block" to listOf("block"), "report" to listOf("report"),
+        "accept" to listOf("accept"), "agree" to listOf("agree", "accept"), "allow" to listOf("allow", "grant"), "grant" to listOf("grant", "allow"),
+        "lock" to listOf("lock"),
+    )
+
+    /**
+     * True when the user's own request already asked for this medium-risk action (e.g. tapping
+     * "Send" after "send hello to Pranav"). High-risk actions are never covered.
+     */
+    fun requestCovers(request: String, a: RiskAssessment, toolName: String): Boolean {
+        if (a.risk != Risk.MEDIUM) return false
+        val req = request.lowercase()
+        val verb = medium.find(a.reason)?.value?.lowercase()
+            ?: toolName.substringBefore('_').lowercase()
+        val words = synonyms[verb] ?: listOf(verb)
+        if (a.reason.startsWith("Change a system setting")) {
+            return listOf("turn on", "turn off", "switch", "enable", "disable", "toggle", "set ").any { req.contains(it) }
+        }
+        return words.any { w -> Regex("\\b" + Regex.escape(w) + "\\b").containsMatchIn(req) }
+    }
 }

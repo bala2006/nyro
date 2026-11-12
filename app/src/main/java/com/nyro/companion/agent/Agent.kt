@@ -67,6 +67,7 @@ class Agent(private val g: AppGraph) {
     val conversationId: StateFlow<Long?> = _conversationId
 
     private var job: Job? = null
+    @Volatile private var currentRequest = ""
     private var lastFromVoice = false
 
     fun newConversation() { stop(); _conversationId.value = null; _state.value = AssistantState() }
@@ -121,6 +122,9 @@ class Agent(private val g: AppGraph) {
 
     private suspend fun run(text: String) {
         _state.value = AssistantState(phase = Phase.THINKING, request = text, taskActive = true)
+        currentRequest = text
+        g.usage.startTask()
+        UiFeedback.status(null)
         val cid = ensureConversation(text)
         g.dao.insertMessage(MessageEntity(conversationId = cid, role = "user", content = Redactor.redact(text)))
 
@@ -147,8 +151,11 @@ class Agent(private val g: AppGraph) {
             for (iteration in 0 until MAX_ITERATIONS) {
                 _state.update { it.copy(phase = Phase.THINKING, reply = "") }
                 compact(messages)
+                UiFeedback.status(null)
+                g.usage.turnStarted()
                 val onDelta = { d: String ->
                     _state.update { it.copy(reply = it.reply + d) }
+                    g.usage.onDelta(d)
                     tts.push(d)
                 }
                 val turn = try {
@@ -161,6 +168,7 @@ class Agent(private val g: AppGraph) {
                     g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta)
                 }
                 tts.flush()
+                g.usage.turnFinished(turn.usage)
 
                 if (turn.toolCalls.isEmpty()) {
                     val reply = turn.content.trim().ifEmpty { if (stepNo > 0) "Done." else "…" }
@@ -191,6 +199,7 @@ class Agent(private val g: AppGraph) {
             finish(Phase.IDLE)
         } catch (e: CancellationException) {
             tts.cancel()
+            g.usage.turnFinished(null)
             withContext(NonCancellable) {
                 taskId?.let { g.dao.finishTask(it, "cancelled", "Stopped by user", log.toString()) }
                 g.dao.insertMessage(MessageEntity(conversationId = cid, role = "assistant", content = "(stopped)"))
@@ -199,6 +208,7 @@ class Agent(private val g: AppGraph) {
             throw e
         } catch (e: AiException) {
             tts.cancel()
+            g.usage.turnFinished(null)
             taskId?.let { g.dao.finishTask(it, "failed", e.message.orEmpty(), log.toString()) }
             val offlineKinds = setOf(AiErrorKind.NETWORK, AiErrorKind.TIMEOUT, AiErrorKind.SERVER, AiErrorKind.RATE_LIMIT, AiErrorKind.QUOTA)
             if (e.kind in offlineKinds && stepNo == 0 && localFallback(cid, text, null, quietIfUnhandled = true)) return
@@ -230,7 +240,9 @@ class Agent(private val g: AppGraph) {
         }
 
         val assessment = tool.assess(args)
-        val needsConfirm = assessment.risk == Risk.HIGH || (assessment.risk == Risk.MEDIUM && g.settings.current.confirmMediumRisk)
+        val coveredByRequest = com.nyro.companion.tools.SensitiveUi.requestCovers(currentRequest, assessment, tool.name)
+        val needsConfirm = assessment.risk == Risk.HIGH ||
+            (assessment.risk == Risk.MEDIUM && g.settings.current.confirmMediumRisk && !coveredByRequest)
         val label = tool.describe(args)
         if (needsConfirm) {
             addStep(Step(stepNo, label, StepStatus.RUNNING, "Waiting for your confirmation", assessment.risk))
@@ -353,6 +365,8 @@ How you work:
 - You act through tools that run locally on the phone. Observe → act → observe. After every action, check the returned screen state to verify it worked before moving on. Never claim something happened unless a tool result confirms it.
 - For multi-step tasks: open the app (open_app), read the screen, then use element ids with tap_element / type_text / scroll. Prefer element ids over coordinates. If the accessibility tree lacks what you need (images, video, games, canvas UIs), use take_screenshot.
 - To search inside an app: tap its search control, type_text with submit=true, then confirm results appeared.
+- To send a message (WhatsApp, SMS, etc.): open the chat, type_text into the message box WITHOUT submit, then tap the Send button (usually desc "Send"). Done only when the message appears in the conversation and the box is empty.
+- Work fast: don't call read_screen right after an action; action results already include the new screen.
 - If a step fails, try a sensible alternative (scroll, go back, re-read, search) up to a few times, then explain what blocked you.
 - The phone's safety layer may ask the user to confirm risky actions; if a tool returns DENIED, stop that path and ask the user.
 - Never enter passwords, OTPs or payment details, never bypass lock screens, biometrics or permission dialogs that require the user. Ask the user to do those steps.

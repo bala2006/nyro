@@ -152,7 +152,7 @@ fun screenTools(): List<Tool> = listOf(
 
     object : Tool(
         "type_text",
-        "Type text into an input field (replaces its content). Uses element_id if given, otherwise the focused field, otherwise the first visible input. Set submit=true to press the keyboard's enter/search action afterwards.",
+        "Type text into an input field (replaces its content). Uses element_id if given, otherwise the focused field, otherwise the first visible input. submit=true presses the keyboard's enter/search action (good for search boxes). In chat apps do NOT use submit; tap the Send button instead.",
         requires = setOf(Requirement.ACCESSIBILITY), touchesScreen = true,
         params = { string("text", "Text to enter"); int("element_id", "Input element id", required = false); bool("submit", "Press enter/search after typing") },
     ) {
@@ -186,8 +186,19 @@ fun screenTools(): List<Tool> = listOf(
             val verified = actual.contains(text.take(20)) || text.isEmpty()
             var note = if (verified) "Typed \"$text\"." else "Typed, but the field now shows \"${actual.take(60)}\" (may be formatted or autocompleted)."
             if (args.bool("submit") == true) {
-                val submitted = ScreenReader.imeEnter(target)
-                note += if (submitted) " Submitted with keyboard action." else " Keyboard submit action unavailable; look for a search/send button."
+                val accepted = ScreenReader.imeEnter(target)
+                delay(400)
+                target.refresh()
+                val after = target.text?.toString().orEmpty()
+                when {
+                    !accepted -> note += " Keyboard submit action unavailable: NOT submitted. Tap the app's Send/Search button."
+                    after.contains('\n') || after.trim() == text.trim() && text.isNotBlank() -> {
+                        // Enter only inserted a newline (common in chat apps): undo it and say so.
+                        if (after.contains('\n')) ScreenReader.setText(target, text)
+                        note += " The keyboard action did NOT send/submit (text is still in the field). Tap the Send/Search button next."
+                    }
+                    else -> note += " Submitted with the keyboard action (field now: \"${after.take(40)}\")."
+                }
             }
             return ScreenSession.observe(svc, before, note)
         }

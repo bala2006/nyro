@@ -51,14 +51,18 @@ class EffectsView(context: Context) : View(context) {
     fun highlight(r: android.graphics.Rect) = add(Fx(3, RectF(r), now(), 650))
 
     private var status: String? = null
-    private val pillBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(225, 8, 16, 38) }
+    private var metrics: String? = null
+    private val pillBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(230, 8, 16, 38) }
     private val pillEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.2f * density; color = Color.argb(150, 56, 232, 255) }
     private val pillText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(234, 242, 255); textSize = 13f * density; typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) }
+    private val pillSub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(140, 214, 235); textSize = 11f * density; typeface = android.graphics.Typeface.MONOSPACE }
     private val pillDot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = cyan }
 
-    /** Top-of-screen pill telling the user what NYRO is doing right now. */
-    fun setStatus(text: String?) {
-        status = text?.let { if (it.length > 48) it.take(46) + "…" else it }
+    /** Top-of-screen pill: what NYRO is doing right now, plus token usage and speed. */
+    fun setStatus(text: String?, sub: String? = null, dotColor: Int = cyan) {
+        val t = text?.let { if (it.length > 44) it.take(42) + "…" else it }
+        if (t == status && sub == metrics && pillDot.color == dotColor) return
+        status = t; metrics = sub; pillDot.color = dotColor
         invalidate()
     }
 
@@ -91,15 +95,20 @@ class EffectsView(context: Context) : View(context) {
         }
         status?.let { txt ->
             val label = "NYRO · $txt"
-            val tw = pillText.measureText(label)
-            val h = 34f * density; val padX = 16f * density
-            val top = rootWindowInsets?.getInsets(android.view.WindowInsets.Type.statusBars())?.top?.toFloat()?.plus(6f * density) ?: (36f * density)
-            val left = (width - tw) / 2f - padX - 8f * density
-            val rr = RectF(left, top, left + tw + padX * 2 + 8f * density, top + h)
-            canvas.drawRoundRect(rr, h / 2, h / 2, pillBg)
-            canvas.drawRoundRect(rr, h / 2, h / 2, pillEdge)
-            canvas.drawCircle(rr.left + padX, rr.centerY(), 3.5f * density, pillDot)
-            canvas.drawText(label, rr.left + padX + 10f * density, rr.centerY() - (pillText.descent() + pillText.ascent()) / 2, pillText)
+            val sub = metrics
+            val tw = maxOf(pillText.measureText(label), sub?.let { pillSub.measureText(it) } ?: 0f)
+            val h = (if (sub != null) 46f else 32f) * density; val padX = 14f * density
+            val top = rootWindowInsets?.getInsets(android.view.WindowInsets.Type.statusBars())?.top?.toFloat()?.plus(4f * density) ?: (34f * density)
+            val w = tw + padX * 2 + 12f * density
+            val left = (width - w) / 2f
+            val rr = RectF(left, top, left + w, top + h)
+            canvas.drawRoundRect(rr, 16f * density, 16f * density, pillBg)
+            canvas.drawRoundRect(rr, 16f * density, 16f * density, pillEdge)
+            val textX = rr.left + padX + 12f * density
+            val line1Y = if (sub != null) rr.top + 19f * density else rr.centerY() - (pillText.descent() + pillText.ascent()) / 2
+            canvas.drawCircle(rr.left + padX + 2f * density, line1Y + (pillText.ascent() + pillText.descent()) / 2, 3.5f * density, pillDot)
+            canvas.drawText(label, textX, line1Y, pillText)
+            if (sub != null) canvas.drawText(sub, textX, rr.top + 37f * density, pillSub)
         }
         for (f in effects) {
             val p = ((t - f.start).toFloat() / f.dur).coerceIn(0f, 1f)

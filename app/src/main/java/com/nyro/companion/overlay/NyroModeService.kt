@@ -81,8 +81,10 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         UiFeedback.host = this
         g.voice.warmUp()
         lifecycleScope.launch {
-            kotlinx.coroutines.flow.combine(UiFeedback.statusText, UiFeedback.notice) { st, n -> n ?: st }
-                .collect { effects?.setStatus(it) }
+            kotlinx.coroutines.flow.combine(
+                g.agent.state, g.voice.speaking, UiFeedback.statusText, UiFeedback.notice, g.usage.state,
+            ) { st, speaking, tool, notice, u -> pillFor(st, speaking, tool, notice, u) }
+                .collect { (text, sub, color) -> effects?.setStatus(text, sub, color) }
         }
         lifecycleScope.launch {
             UiFeedback.notice.collect { n -> if (n != null) { delay(2600); if (UiFeedback.notice.value == n) UiFeedback.notice(null) } }
@@ -111,6 +113,27 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         orbView = null; panelView = null; effects = null
         viewModelStore.clear()
         super.onDestroy()
+    }
+
+    /** Status pill content. Always shown in NYRO Mode, so the user can see what NYRO is doing. */
+    private fun pillFor(
+        st: com.nyro.companion.agent.AssistantState, speaking: Boolean, tool: String?, notice: String?,
+        u: com.nyro.companion.agent.UsageState,
+    ): Triple<String, String, Int> {
+        val cyan = android.graphics.Color.rgb(56, 232, 255)
+        val (text, color) = when {
+            notice != null -> notice to cyan
+            st.confirmation != null -> "Needs your OK: ${st.confirmation.text}" to android.graphics.Color.rgb(255, 181, 71)
+            st.phase == com.nyro.companion.agent.Phase.ERROR -> "Problem: ${st.error ?: "request failed"}" to android.graphics.Color.rgb(255, 77, 109)
+            st.phase == com.nyro.companion.agent.Phase.LISTENING -> (st.partialTranscript.ifBlank { "Listening…" }) to android.graphics.Color.rgb(92, 242, 255)
+            st.phase == com.nyro.companion.agent.Phase.EXECUTING && tool != null -> tool to android.graphics.Color.rgb(47, 123, 255)
+            st.phase == com.nyro.companion.agent.Phase.THINKING -> (if (u.streaming && st.reply.isNotBlank()) "Responding…" else "Thinking…") to android.graphics.Color.rgb(122, 92, 255)
+            speaking -> "Speaking" to android.graphics.Color.rgb(60, 240, 208)
+            else -> "Ready" to cyan
+        }
+        val speed = if (u.tokensPerSec > 0f) "%.0f tok/s".format(u.tokensPerSec) else "– tok/s"
+        val task = if (st.taskActive || u.task > 0) "task ${com.nyro.companion.agent.UsageMeter.fmt(u.task)} · " else ""
+        return Triple(text, "${task}total ${com.nyro.companion.agent.UsageMeter.fmt(u.total)} tok · $speed", color)
     }
 
     // ---------------- Foreground ----------------
