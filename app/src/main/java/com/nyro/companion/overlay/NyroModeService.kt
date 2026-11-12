@@ -13,10 +13,8 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
@@ -42,7 +40,7 @@ import kotlin.coroutines.resume
 /**
  * NYRO Mode. A foreground service that owns the floating companion and its windows:
  *  - orb window: the draggable entity, status bubble and emergency stop
- *  - panel window: the expanded conversation/task panel (focusable only while open)
+ *  - confirm window: approval card for risky actions, shown under the status pill
  *  - effects window: full-screen, non-touchable feedback layer
  * Normal Mode = this service is not running: no overlay, no mic, no capture.
  */
@@ -55,12 +53,12 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     private val main = Handler(Looper.getMainLooper())
 
     private var orbView: ComposeView? = null
-    private var panelView: ComposeView? = null
+    private var confirmView: ComposeView? = null
+    private lateinit var confirmParams: WindowManager.LayoutParams
     private var effects: EffectsView? = null
     private lateinit var orbParams: WindowManager.LayoutParams
     private lateinit var effectsParams: WindowManager.LayoutParams
 
-    val panelOpen = mutableStateOf(false)
     private var fgsTypes = 0
 
     override fun onCreate() {
@@ -78,6 +76,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         wm = getSystemService(WindowManager::class.java)
         addEffects()
         addOrb()
+        addConfirm()
         UiFeedback.host = this
         g.voice.warmUp()
         lifecycleScope.launch {
@@ -97,7 +96,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         when (intent?.action) {
             ACTION_OFF -> lifecycleScope.launch { NyroApp.graph.mode.disable() }
             ACTION_STOP -> NyroApp.graph.agent.stop()
-            ACTION_LISTEN -> { expandPanel(); NyroApp.graph.agent.startListening() }
+            ACTION_LISTEN -> NyroApp.graph.agent.startListening()
         }
         return START_STICKY
     }
@@ -108,9 +107,9 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         NyroApp.graph.agent.stop()
         ScreenCaptureManager.release()
         if (::wm.isInitialized) {
-            listOfNotNull(orbView, panelView?.takeIf { panelOpen.value }, effects).forEach { v -> runCatching { wm.removeViewImmediate(v) } }
+            listOfNotNull(orbView, confirmView, effects).forEach { v -> runCatching { wm.removeViewImmediate(v) } }
         }
-        orbView = null; panelView = null; effects = null
+        orbView = null; confirmView = null; effects = null
         viewModelStore.clear()
         super.onDestroy()
     }
@@ -230,7 +229,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             setContent {
                 NyroTheme {
                     OrbOverlay(
-                        onTap = { togglePanel(listen = true) },
+                        onTap = { NyroApp.graph.agent.startListening() },
                         onLongPress = { NyroApp.graph.agent.stop(); UiFeedback.notice("Stopped") },
                         onDragStart = { dragStartX = orbParams.x; dragStartY = orbParams.y },
                         onDragBy = { dx, dy -> moveOrbTo(dragStartX + dx.toInt(), dragStartY + dy.toInt()) },
@@ -276,93 +275,25 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         }
     }
 
-    private fun panelParams(): WindowManager.LayoutParams = overlayParams(
-        WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.WRAP_CONTENT,
-        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
-    ).apply {
-        gravity = Gravity.BOTTOM
-        softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE or WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN
-        dimAmount = 0f
-    }
-
-    private fun togglePanel(listen: Boolean) {
-        val agent = NyroApp.graph.agent
-        if (panelOpen.value) {
-            if (listen) agent.startListening() else hidePanel()
-            return
-        }
-        showPanel()
-        if (listen && agent.state.value.confirmation == null && agent.state.value.phase != com.nyro.companion.agent.Phase.EXECUTING) agent.startListening()
-    }
-
-    private fun showPanel() {
-        if (panelOpen.value) return
-        val view = panelView ?: ComposeView(this).owned().apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
-            setContent {
-                NyroTheme {
-                    PanelOverlay(
-                        onCollapse = { hidePanel() },
-                        onOpenApp = {
-                            hidePanel()
-                            startActivity(Intent(this@NyroModeService, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        },
-                        onNormalMode = { lifecycleScope.launch { NyroApp.graph.mode.disable() } },
-                        onTyping = { typing -> setPanelTyping(typing) },
-                    )
-                }
-            }
-            setOnTouchListener { _, ev ->
-                // Outside touches on NYRO's own orb carry coordinates; let the orb handle those.
-                if (ev.action == MotionEvent.ACTION_OUTSIDE) { if (!isOnOrb(ev.rawX, ev.rawY)) maybeAutoCollapse(); true } else false
-            }
-        }.also { panelView = it }
-        val lp = panelParams().also { panelLp = it }
-        runCatching { wm.addView(view, lp) }.onSuccess { panelOpen.value = true }
-    }
-
-    private var panelLp: WindowManager.LayoutParams? = null
-
-    /**
-     * While typing, move the panel to the top of the screen so the keyboard can't cover it
-     * (overlay windows aren't resized for the IME), and keep the keyboard visible.
-     */
-    private fun setPanelTyping(typing: Boolean) {
-        val v = panelView ?: return
-        val lp = panelLp ?: return
-        if (!panelOpen.value) return
-        panelTyping = typing
-        lp.gravity = if (typing) Gravity.TOP else Gravity.BOTTOM
-        lp.y = if (typing) statusBarHeight() else 0
-        lp.softInputMode = (if (typing) WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE else WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN) or
-            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
-        runCatching { wm.updateViewLayout(v, lp) }
-    }
-
     private fun statusBarHeight(): Int {
         val id = resources.getIdentifier("status_bar_height", "dimen", "android")
         return if (id > 0) resources.getDimensionPixelSize(id) else (24 * resources.displayMetrics.density).toInt()
     }
 
-    @Volatile private var panelTyping = false
-
-    private fun maybeAutoCollapse() {
-        // Keyboard taps are "outside" touches for the panel window: never collapse while typing.
-        if (panelTyping) return
-        // Keep the panel up while the user must answer a confirmation.
-        if (NyroApp.graph.agent.state.value.confirmation == null) hidePanel()
-    }
-
-    private fun hidePanel() {
-        val v = panelView ?: return
-        if (!panelOpen.value) return
-        runCatching {
-            v.findFocus()?.let { f -> getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.hideSoftInputFromWindow(f.windowToken, 0); f.clearFocus() }
+    /** Approval card, placed under the status pill. It is only sized while an action waits for approval. */
+    private fun addConfirm() {
+        confirmParams = overlayParams(
+            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = statusBarHeight() + (60 * resources.displayMetrics.density).toInt()
         }
-        runCatching { wm.removeView(v) }
-        panelOpen.value = false
-        panelTyping = false
-        panelLp?.let { it.gravity = Gravity.BOTTOM; it.y = 0 }
+        confirmView = ComposeView(this).owned().apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
+            setContent { NyroTheme { ConfirmOverlay() } }
+        }
+        wm.addView(confirmView, confirmParams)
     }
 
     // ---------------- OverlayHost ----------------
@@ -371,7 +302,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     override fun showSwipe(x1: Float, y1: Float, x2: Float, y2: Float) { main.post { effects?.swipe(x1, y1, x2, y2) } }
     override fun highlight(r: Rect) { main.post { effects?.highlight(r) } }
     override fun setExecuting(on: Boolean) { main.post { effects?.setExecuting(on) } }
-    override fun expandPanel() { main.post { showPanel() } }
+    override fun expandPanel() { /* the approval card follows agent state; nothing to open */ }
 
     override fun setTouchPassThrough(on: Boolean) {
         main.post {
@@ -383,17 +314,11 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         }
     }
 
-    override suspend fun collapsePanel(): Boolean {
-        if (!panelOpen.value) return false
-        suspendOnMain { hidePanel() }
-        delay(220) // let the window animation finish before reading/touching the app beneath
-        return true
-    }
+    override suspend fun collapsePanel(): Boolean = false
 
     override suspend fun <T> hidden(block: suspend () -> T): T {
         suspendOnMain {
             orbView?.visibility = View.INVISIBLE; effects?.visibility = View.INVISIBLE
-            if (panelOpen.value) hidePanel()
         }
         delay(120)
         try { return block() } finally {
