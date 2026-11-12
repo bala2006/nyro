@@ -291,8 +291,11 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
 
     /** Approval card, placed under the status pill. It is only sized while an action waits for approval. */
     private fun addConfirm() {
+        // A fixed width keeps the card fully on screen (wrap-content windows were clipped at the edge).
+        val dm = resources.displayMetrics
+        val cardWidth = minOf((340 * dm.density).toInt(), dm.widthPixels - (32 * dm.density).toInt())
         confirmParams = overlayParams(
-            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            cardWidth, WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL

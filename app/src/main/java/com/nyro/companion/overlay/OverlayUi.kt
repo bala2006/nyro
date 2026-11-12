@@ -161,20 +161,20 @@ fun ConfirmOverlay() {
     val st by g.agent.state.collectAsStateWithLifecycle()
     val c = st.confirmation ?: return
     val accent = if (c.risk == com.nyro.companion.tools.Risk.HIGH) Nyro.Danger else Nyro.Amber
+    val app = com.nyro.companion.tools.ScreenSession.last?.appLabel?.takeIf { it.isNotBlank() }
     Column(
         Modifier
-            .widthIn(max = 340.dp)
-            .padding(horizontal = 10.dp)
+            .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .background(Nyro.Glass.copy(alpha = 0.94f))
+            .background(Nyro.Glass.copy(alpha = 0.97f))
             .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
             .padding(12.dp),
     ) {
         Text(
-            if (c.risk == com.nyro.companion.tools.Risk.HIGH) "HIGH-RISK ACTION" else "CONFIRM ACTION",
+            (if (c.risk == com.nyro.companion.tools.Risk.HIGH) "HIGH-RISK ACTION" else "CONFIRM ACTION") + (app?.let { " · $it" } ?: ""),
             style = MaterialTheme.typography.labelSmall, color = accent,
         )
-        Text(c.text, style = MaterialTheme.typography.bodyMedium, color = Nyro.TextHi)
+        Text(c.text, style = MaterialTheme.typography.bodyMedium, color = Nyro.TextHi, maxLines = 4)
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { g.agent.answerConfirmation(false) }) { Text("Don't", color = Nyro.TextHi) }
             Button(
