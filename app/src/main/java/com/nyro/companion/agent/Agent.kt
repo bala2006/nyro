@@ -174,7 +174,7 @@ class Agent(private val g: AppGraph) {
                 }
 
                 if (taskId == null) taskId = g.dao.insertTask(TaskEntity(request = text, status = "running"))
-                messages += Msg.assistantToolCalls(turn.content, turn.toolCalls)
+                messages += Msg.assistantToolCalls(turn.content, turn.toolCalls, turn.rawItems)
                 val images = ArrayList<JsonObject>()
                 for (call in turn.toolCalls) {
                     val result = execute(call, ++stepNo, log)

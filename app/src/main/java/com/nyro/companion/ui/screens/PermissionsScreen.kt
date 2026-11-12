@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
@@ -100,17 +101,7 @@ fun PermissionsScreen(onBack: () -> Unit) {
             "Reads the screen and performs taps, swipes, scrolling and typing you ask for. Also enables screenshots without extra prompts.",
             p.accessibility,
         ) { open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        GlassCard(Modifier.fillMaxWidth(), accent = Nyro.Amber.copy(alpha = 0.4f), padding = 12) {
-            Column {
-                Text("“Restricted setting” message?", color = Nyro.Amber, style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "Android 13+ blocks Accessibility and Notification access for apps installed from an APK until you allow it: open App info → ⋮ (top right) → Allow restricted settings, then enable NYRO again.",
-                    color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall,
-                )
-                Spacer(Modifier.size(6.dp))
-                FilledTonalButton(onClick = { open(appDetails) }) { Text("Open App info") }
-            }
-        }
+        if (!p.accessibility || !p.notifListener) RestrictedSettingsGuide(restrictedState(ctx), onOpenAppInfo = { open(appDetails) })
         Gap(12)
         SectionLabel("Optional")
         PermRow("Notification access", "Lets NYRO read and summarize notifications and reply through them.", p.notifListener) {
@@ -129,6 +120,64 @@ fun PermissionsScreen(onBack: () -> Unit) {
             color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall,
         )
     }
+}
+
+/**
+ * Android 13+ "restricted settings" state for this app, read from the app-op the Settings app
+ * itself checks. true = still blocked, false = allowed, null = can't tell on this build.
+ */
+fun restrictedState(ctx: Context): Boolean? = runCatching {
+    val ops = ctx.getSystemService(android.app.AppOpsManager::class.java)
+    val mode = ops.unsafeCheckOpNoThrow("android:access_restricted_settings", android.os.Process.myUid(), ctx.packageName)
+    when (mode) {
+        android.app.AppOpsManager.MODE_ALLOWED -> false
+        android.app.AppOpsManager.MODE_ERRORED, android.app.AppOpsManager.MODE_IGNORED -> true
+        else -> null
+    }
+}.getOrNull()
+
+@Composable
+private fun RestrictedSettingsGuide(blocked: Boolean?, onOpenAppInfo: () -> Unit) {
+    val accent = if (blocked == false) Nyro.Ok else Nyro.Amber
+    GlassCard(Modifier.fillMaxWidth(), accent = accent.copy(alpha = 0.5f), padding = 14) {
+        Column {
+            Text(
+                when (blocked) {
+                    true -> "Restricted settings are blocking NYRO"
+                    false -> "Restricted settings look allowed"
+                    null -> "Seeing “Restricted setting”?"
+                },
+                color = accent, style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                if (blocked == false) "Enable NYRO Phone Control and Notification access with the Grant buttons. If Android still shows “Restricted setting”, follow the steps from App info → ⋮ → Allow restricted settings."
+                else "Android blocks Accessibility and Notification access for apps installed from an APK file. Only you can unlock it, once:",
+                color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall,
+            )
+            if (blocked != false) {
+                Spacer(Modifier.size(6.dp))
+                listOf(
+                    "Tap Grant on “NYRO Phone Control” once and dismiss the “Restricted setting” dialog (Android only shows the unlock option after this attempt).",
+                    "Tap “Open App info” below.",
+                    "Tap ⋮ (three dots, top-right) → “Allow restricted settings”, then confirm with your PIN/fingerprint.",
+                    "Come back here and tap Grant again. The switch now works for Phone Control and Notification access.",
+                ).forEachIndexed { i, step ->
+                    Row(Modifier.padding(vertical = 2.dp)) {
+                        Text("${i + 1}.", color = accent, style = MaterialTheme.typography.bodySmall, modifier = Modifier.width(18.dp))
+                        Text(step, color = Nyro.TextHi, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Spacer(Modifier.size(8.dp))
+                FilledTonalButton(onClick = onOpenAppInfo) { Text("Open App info") }
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    "No ⋮ menu? On HiOS open Settings → Apps → App management → NYRO, then ⋮. If your phone has no such option, install NYRO from a computer with “adb install nyro.apk”; apps installed that way are not restricted.",
+                    color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+    Spacer(Modifier.size(8.dp))
 }
 
 @Composable

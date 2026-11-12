@@ -2,6 +2,7 @@ package com.nyro.companion.ai
 
 import com.nyro.companion.data.ProviderConfig
 import com.nyro.companion.data.ProviderType
+import com.nyro.companion.data.WireApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -44,7 +45,16 @@ data class AiTurn(
     val toolCalls: List<ToolCall>,
     val finishReason: String?,
     val model: String?,
+    /** Which REST API produced this turn. */
+    val api: WireKind = WireKind.CHAT,
+    /** Responses API only: the raw output items (reasoning, function_call, message) to replay next turn. */
+    val rawItems: JsonArray? = null,
 )
+
+enum class WireKind { CHAT, RESPONSES }
+
+/** Private key on an assistant message holding Responses output items; never sent to Chat Completions. */
+internal const val RAW_ITEMS_KEY = "_nyro_responses_items"
 
 /** Failure categories surfaced to the user with a meaningful explanation. */
 enum class AiErrorKind { NOT_CONFIGURED, INVALID_ENDPOINT, AUTH, DEPLOYMENT_NOT_FOUND, API_VERSION, RATE_LIMIT, QUOTA, CAPABILITY, CONTENT_FILTER, NETWORK, TIMEOUT, SERVER, BAD_REQUEST, UNKNOWN }
@@ -65,7 +75,8 @@ object Msg {
             })
         })
     }
-    fun assistantToolCalls(content: String, calls: List<ToolCall>) = buildJsonObject {
+    fun assistantToolCalls(content: String, calls: List<ToolCall>, rawItems: JsonArray? = null) = buildJsonObject {
+        rawItems?.let { put(RAW_ITEMS_KEY, it) }
         put("role", "assistant")
         if (content.isNotEmpty()) put("content", content) else put("content", JsonPrimitive(null as String?))
         put("tool_calls", buildJsonArray {
@@ -88,7 +99,13 @@ object Msg {
  * Azure AI Foundry model-inference route; all three speak the chat-completions schema
  * but differ in URL shape, versioning and how the model is selected.
  */
-class AzureClient(private val keyProvider: () -> String?) {
+class AzureClient(
+    private val keyProvider: () -> String?,
+    /** Persists that a deployment needs the Responses API (Auto mode). */
+    private val onResponsesRequired: suspend (String) -> Unit = {},
+) {
+    /** Deployments detected this session as needing the Responses API (before the setting round-trips). */
+    private val forcedResponses = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val http = OkHttpClient.Builder()
@@ -140,11 +157,24 @@ class AzureClient(private val keyProvider: () -> String?) {
         }
     }
 
+    /** The v1 Responses route works for Azure OpenAI and Foundry resources alike. */
+    private fun responsesUrlFor(cfg: ProviderConfig): String = "${baseOf(cfg.endpoint)}/openai/v1/responses"
+
+    private fun wantsResponses(cfg: ProviderConfig, deployment: String) =
+        cfg.wireApi != WireApi.CHAT && (cfg.useResponses(deployment) || deployment in forcedResponses)
+
+    /** The service's own hint that tool calling with this (reasoning) model must use /responses. */
+    private fun needsResponses(e: AiException): Boolean {
+        val m = e.message.orEmpty()
+        return e.httpCode == 400 && (m.contains("/responses", true) || (m.contains("reasoning_effort", true) && m.contains("not supported", true)))
+    }
+
     // ---------- Requests ----------
 
     /**
-     * One chat turn. When [onDelta] is given the response is streamed (SSE) and text deltas are
-     * forwarded as they arrive; tool-call fragments are accumulated and returned complete.
+     * One model turn. Messages and tools are always given in Chat Completions shape; when the
+     * deployment needs the Responses API they are translated on the wire. When [onDelta] is set
+     * the response is streamed and text deltas are forwarded as they arrive.
      */
     suspend fun chat(
         cfg: ProviderConfig,
@@ -153,39 +183,163 @@ class AzureClient(private val keyProvider: () -> String?) {
         deployment: String = cfg.deployment,
         onDelta: ((String) -> Unit)? = null,
         maxTokens: Int? = null,
-    ): AiTurn = withContext(Dispatchers.IO) {
+    ): AiTurn {
         validate(cfg)?.let { throw AiException(AiErrorKind.INVALID_ENDPOINT, it) }
         val key = keyProvider() ?: throw AiException(AiErrorKind.NOT_CONFIGURED, "No API key saved. Add it in Settings → AI Provider.")
 
+        if (wantsResponses(cfg, deployment)) {
+            return try {
+                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens) }
+            } catch (e: AiException) {
+                // Endpoint has no Responses route (e.g. a gateway): fall back to chat with reasoning disabled.
+                if (cfg.wireApi == WireApi.AUTO && e.httpCode == 404) {
+                    send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, reasoningNone = tools != null) }
+                } else throw e
+            }
+        }
+        return try {
+            send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, reasoningNone = false) }
+        } catch (e: AiException) {
+            if (!needsResponses(e)) throw e
+            if (cfg.wireApi == WireApi.CHAT) {
+                // User pinned Chat Completions: the service allows tools only with reasoning disabled.
+                send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, reasoningNone = true) }
+            } else {
+                forcedResponses += deployment
+                runCatching { onResponsesRequired(deployment) }
+                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens) }
+            }
+        }
+    }
+
+    private fun stripPrivate(m: JsonObject): JsonObject =
+        if (RAW_ITEMS_KEY in m) JsonObject(m - RAW_ITEMS_KEY) else m
+
+    private fun chatBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?, reasoningNone: Boolean) = buildJsonObject {
+        if (cfg.type != ProviderType.AZURE_OPENAI) put("model", deployment)
+        put("messages", JsonArray(messages.map(::stripPrivate)))
+        if (tools != null && tools.isNotEmpty()) { put("tools", tools); put("tool_choice", "auto") }
+        when {
+            reasoningNone -> put("reasoning_effort", "none")
+            cfg.reasoningEffort.isNotBlank() -> put("reasoning_effort", cfg.reasoningEffort)
+        }
+        if (maxTokens != null) put("max_tokens", maxTokens)
+        if (stream) put("stream", true)
+    }
+
+    /** Translates Chat-shaped history into Responses input items (stateless: store=false). */
+    private fun responsesBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?) = buildJsonObject {
+        put("model", deployment)
+        val instructions = messages.filter { it.str("role") == "system" }.mapNotNull { it.str("content") }.joinToString("\n\n")
+        if (instructions.isNotBlank()) put("instructions", instructions)
+        put("input", buildJsonArray {
+            for (m in messages) {
+                when (m.str("role")) {
+                    "system" -> Unit
+                    "tool" -> add(buildJsonObject {
+                        put("type", "function_call_output"); put("call_id", m.str("tool_call_id").orEmpty()); put("output", m.str("content").orEmpty())
+                    })
+                    "assistant" -> {
+                        val raw = m[RAW_ITEMS_KEY] as? JsonArray
+                        if (raw != null) raw.forEach { add(it) }
+                        else {
+                            m.str("content")?.takeIf { it.isNotBlank() }?.let { t -> add(buildJsonObject { put("role", "assistant"); put("content", t) }) }
+                            (m["tool_calls"] as? JsonArray)?.forEach { tc ->
+                                val o = tc.jsonObject; val f = o["function"]?.jsonObject
+                                add(buildJsonObject {
+                                    put("type", "function_call"); put("call_id", o.str("id").orEmpty())
+                                    put("name", f?.str("name").orEmpty()); put("arguments", f?.str("arguments") ?: "{}")
+                                })
+                            }
+                        }
+                    }
+                    else -> { // user
+                        when (val c = m["content"]) {
+                            is JsonArray -> add(buildJsonObject {
+                                put("role", "user")
+                                put("content", buildJsonArray {
+                                    c.forEach { part ->
+                                        val p = part.jsonObject
+                                        when (p.str("type")) {
+                                            "text" -> add(buildJsonObject { put("type", "input_text"); put("text", p.str("text").orEmpty()) })
+                                            "image_url" -> add(buildJsonObject {
+                                                put("type", "input_image")
+                                                put("image_url", p["image_url"]?.jsonObject?.str("url").orEmpty())
+                                                put("detail", "auto")
+                                            })
+                                        }
+                                    }
+                                })
+                            })
+                            else -> add(buildJsonObject { put("role", "user"); put("content", (c as? JsonPrimitive)?.contentOrNull.orEmpty()) })
+                        }
+                    }
+                }
+            }
+        })
+        if (tools != null && tools.isNotEmpty()) {
+            put("tools", buildJsonArray {
+                tools.forEach { t ->
+                    val f = t.jsonObject["function"]?.jsonObject ?: return@forEach
+                    add(buildJsonObject {
+                        put("type", "function"); put("name", f.str("name").orEmpty())
+                        f["description"]?.let { put("description", it) }
+                        f["parameters"]?.let { put("parameters", it) }
+                    })
+                }
+            })
+            put("tool_choice", "auto")
+        }
+        if (cfg.reasoningEffort.isNotBlank()) put("reasoning", buildJsonObject { put("effort", cfg.reasoningEffort) })
+        // Keep conversation state on the phone: nothing stored server-side, reasoning replayed encrypted.
+        put("store", false)
+        put("include", buildJsonArray { add(JsonPrimitive("reasoning.encrypted_content")) })
+        if (maxTokens != null) put("max_output_tokens", maxTokens)
+        if (stream) put("stream", true)
+    }
+
+    private suspend fun send(
+        cfg: ProviderConfig,
+        key: String,
+        deployment: String,
+        onDelta: ((String) -> Unit)?,
+        wire: WireKind,
+        body: (stream: Boolean) -> JsonObject,
+    ): AiTurn = withContext(Dispatchers.IO) {
         var stream = onDelta != null
         var attempt = 0
         var emitted = false
         val delta: ((String) -> Unit)? = onDelta?.let { cb -> { d: String -> emitted = true; cb(d) } }
+        var dropInclude = false
         while (true) {
             attempt++
-            val body = buildJsonObject {
-                if (cfg.type != ProviderType.AZURE_OPENAI) put("model", deployment)
-                put("messages", JsonArray(messages))
-                if (tools != null && tools.isNotEmpty()) { put("tools", tools); put("tool_choice", "auto") }
-                if (maxTokens != null) put("max_tokens", maxTokens)
-                if (stream) put("stream", true)
-            }
+            var b = body(stream)
+            if (dropInclude) b = JsonObject(b - "include")
             val req = Request.Builder()
-                .url(urlFor(cfg, deployment))
+                .url(if (wire == WireKind.RESPONSES) responsesUrlFor(cfg) else urlFor(cfg, deployment))
                 .header("api-key", key)
                 .header("Content-Type", "application/json")
                 .header("Accept", if (stream) "text/event-stream" else "application/json")
-                .post(body.toString().toRequestBody(JSON_MT))
+                .post(b.toString().toRequestBody(JSON_MT))
                 .build()
             try {
                 val resp = http.newCall(req).await()
                 resp.use { r ->
                     if (!r.isSuccessful) throw mapHttpError(r.code, r.body?.string().orEmpty(), r.header("Retry-After"))
-                    return@withContext if (stream) readStream(r, delta!!) else readFull(r.body?.string().orEmpty())
+                    return@withContext when {
+                        wire == WireKind.RESPONSES && stream -> readResponsesStream(r, delta!!)
+                        wire == WireKind.RESPONSES -> parseResponse(r.body?.string().orEmpty().let { json.parseToJsonElement(it).jsonObject })
+                        stream -> readStream(r, delta!!)
+                        else -> readFull(r.body?.string().orEmpty())
+                    }
                 }
             } catch (e: AiException) {
+                val msg = e.message.orEmpty()
+                if (wire == WireKind.RESPONSES && !dropInclude && e.httpCode == 400 && (msg.contains("include", true) || msg.contains("encrypted_content", true))) {
+                    dropInclude = true; continue // model without reasoning items
+                }
                 val retryable = (e.kind == AiErrorKind.RATE_LIMIT && e.retryAfterSec in 0..12) || e.kind == AiErrorKind.SERVER
-                if (stream && e.kind == AiErrorKind.BAD_REQUEST && e.message.orEmpty().contains("stream", true)) {
+                if (stream && e.kind == AiErrorKind.BAD_REQUEST && msg.contains("stream", true) && !msg.contains("/responses", true)) {
                     stream = false; continue // deployment rejects streaming: fall back to a single response
                 }
                 if (retryable && attempt < 3 && !emitted) { delay(((e.retryAfterSec.takeIf { it > 0 } ?: 2) * 1000L)); continue }
@@ -197,9 +351,66 @@ class AzureClient(private val keyProvider: () -> String?) {
                 // Never replay a request whose partial answer was already shown/spoken.
                 if (mapped.kind == AiErrorKind.TIMEOUT && attempt < 2 && !emitted) continue
                 throw mapped
+            } catch (e: kotlinx.serialization.SerializationException) {
+                throw AiException(AiErrorKind.SERVER, "Unreadable response from endpoint.")
             }
         }
         @Suppress("UNREACHABLE_CODE") error("unreachable")
+    }
+
+    // ---------- Responses API parsing ----------
+
+    private suspend fun readResponsesStream(r: Response, onDelta: (String) -> Unit): AiTurn {
+        val source = r.body?.source() ?: throw AiException(AiErrorKind.SERVER, "Empty response body")
+        val ctx = kotlin.coroutines.coroutineContext
+        val text = StringBuilder()
+        var final: JsonObject? = null
+        while (true) {
+            ctx.ensureActive()
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.removePrefix("data:").trim()
+            if (data.isEmpty() || data == "[DONE]") continue
+            val ev = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            when (ev.str("type")) {
+                "response.output_text.delta" -> ev.str("delta")?.let { if (it.isNotEmpty()) { text.append(it); onDelta(it) } }
+                "response.completed", "response.incomplete" -> { final = ev["response"]?.jsonObject; break }
+                "response.failed" -> {
+                    val err = ev["response"]?.jsonObject?.get("error")?.jsonObject
+                    throw mapHttpError(if (err?.str("code") == "server_error") 500 else 400, buildJsonObject { err?.let { put("error", it) } }.toString(), null)
+                }
+                "error" -> throw mapHttpError(400, buildJsonObject { put("error", ev) }.toString(), null)
+            }
+        }
+        val f = final ?: throw AiException(AiErrorKind.SERVER, "The response stream ended before completion.")
+        return parseResponse(f, streamedText = text.toString())
+    }
+
+    private fun parseResponse(obj: JsonObject, streamedText: String? = null): AiTurn {
+        obj["error"]?.let { if (it is JsonObject) throw mapHttpError(400, buildJsonObject { put("error", it) }.toString(), null) }
+        val output = obj["output"] as? JsonArray ?: JsonArray(emptyList())
+        val text = StringBuilder()
+        val calls = mutableListOf<ToolCall>()
+        output.forEach { el ->
+            val item = el.jsonObject
+            when (item.str("type")) {
+                "message" -> (item["content"] as? JsonArray)?.forEach { c ->
+                    val co = c.jsonObject
+                    if (co.str("type") == "output_text") text.append(co.str("text").orEmpty())
+                }
+                "function_call" -> calls += ToolCall(item.str("call_id") ?: item.str("id") ?: "call_${calls.size}", item.str("name").orEmpty(), item.str("arguments") ?: "{}")
+            }
+        }
+        val incomplete = obj["incomplete_details"] as? JsonObject
+        if (incomplete?.str("reason") == "content_filter") throw AiException(AiErrorKind.CONTENT_FILTER, "Azure content filter blocked the response.")
+        return AiTurn(
+            content = text.toString().ifEmpty { streamedText.orEmpty() },
+            toolCalls = calls.filter { it.name.isNotBlank() },
+            finishReason = obj.str("status"),
+            model = obj.str("model"),
+            api = WireKind.RESPONSES,
+            rawItems = output,
+        )
     }
 
     private suspend fun readStream(r: Response, onDelta: (String) -> Unit): AiTurn {
@@ -292,13 +503,14 @@ class AzureClient(private val keyProvider: () -> String?) {
                     val ms = System.currentTimeMillis() - started
                     return TestResult(
                         true,
-                        "Connected, but this deployment rejected tool calling (${e.message}). NYRO needs tool calling to control the phone; only chat will work.",
+                        "Connected, but tool calling failed on both Chat Completions and the Responses API (${e.message}). NYRO needs tool calling to control the phone; only chat will work. Try setting API to Responses and reasoning effort to a supported value.",
                         "Model: ${plain.model ?: cfg.deployment} · Tools ✗ · ${ms}ms"
                     )
                 } else throw e
             }
             model = turn.model
             val ms = System.currentTimeMillis() - started
+            caps += if (turn.api == WireKind.RESPONSES) "Responses API" else "Chat Completions"
             caps += if (turn.toolCalls.any { it.name == "ping" }) "Tools ✓" else "Tools ? (model answered without calling)"
             caps += "${ms}ms"
         } catch (e: AiException) {

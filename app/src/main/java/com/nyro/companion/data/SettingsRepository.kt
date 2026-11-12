@@ -33,13 +33,32 @@ enum class ProviderType(val label: String, val help: String) {
     );
 }
 
+/** Which REST API family to use for chat turns. */
+enum class WireApi(val label: String) {
+    AUTO("Auto"),
+    CHAT("Chat Completions"),
+    RESPONSES("Responses"),
+}
+
 data class ProviderConfig(
     val type: ProviderType = ProviderType.AZURE_OPENAI,
     val endpoint: String = "",
     val deployment: String = "",
     val apiVersion: String = DEFAULT_API_VERSION,
     val visionDeployment: String = "",
+    val wireApi: WireApi = WireApi.AUTO,
+    /** "" = model default; otherwise none/minimal/low/medium/high. */
+    val reasoningEffort: String = "",
+    /** Deployment that Auto mode found to require the Responses API (empty = none detected). */
+    val responsesDetectedFor: String = "",
 ) {
+    /** True when requests for [dep] should go to the Responses API. */
+    fun useResponses(dep: String): Boolean = when (wireApi) {
+        WireApi.RESPONSES -> true
+        WireApi.CHAT -> false
+        WireApi.AUTO -> responsesDetectedFor.split(',').any { it.isNotBlank() && it == dep }
+    }
+
     val isComplete: Boolean get() = endpoint.isNotBlank() && deployment.isNotBlank()
 
     companion object {
@@ -75,6 +94,9 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val deployment = stringPreferencesKey("deployment")
         val apiVersion = stringPreferencesKey("api_version")
         val visionDeployment = stringPreferencesKey("vision_deployment")
+        val wireApi = stringPreferencesKey("wire_api")
+        val reasoning = stringPreferencesKey("reasoning_effort")
+        val responsesFor = stringPreferencesKey("responses_detected_for")
         val nyroMode = booleanPreferencesKey("nyro_mode")
         val speechRate = floatPreferencesKey("speech_rate")
         val speechPitch = floatPreferencesKey("speech_pitch")
@@ -105,6 +127,9 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
             deployment = this[K.deployment] ?: "",
             apiVersion = this[K.apiVersion] ?: ProviderConfig.DEFAULT_API_VERSION,
             visionDeployment = this[K.visionDeployment] ?: "",
+            wireApi = this[K.wireApi]?.let { runCatching { WireApi.valueOf(it) }.getOrNull() } ?: WireApi.AUTO,
+            responsesDetectedFor = this[K.responsesFor] ?: "",
+            reasoningEffort = this[K.reasoning] ?: "",
         ),
         nyroMode = this[K.nyroMode] ?: false,
         speechRate = this[K.speechRate] ?: 1.0f,
@@ -128,11 +153,24 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         it[K.deployment] = cfg.deployment
         it[K.apiVersion] = cfg.apiVersion
         it[K.visionDeployment] = cfg.visionDeployment
+        it[K.wireApi] = cfg.wireApi.name
+        it[K.reasoning] = cfg.reasoningEffort
+        // Keep detections only for deployments that are still configured.
+        val keep = (it[K.responsesFor] ?: "").split(',').filter { d -> d.isNotBlank() && (d == cfg.deployment || d == cfg.visionDeployment) }
+        it[K.responsesFor] = keep.joinToString(",")
+    }
+
+    /** Called by the AI client when Auto mode learns a deployment needs the Responses API. */
+    suspend fun markResponsesRequired(deployment: String) = store.edit {
+        val cur = (it[K.responsesFor] ?: "").split(',').filter { d -> d.isNotBlank() }.toMutableSet()
+        cur += deployment
+        it[K.responsesFor] = cur.joinToString(",")
     }
 
     suspend fun clearProvider() = store.edit {
         it.remove(K.endpoint); it.remove(K.deployment); it.remove(K.apiVersion)
         it.remove(K.visionDeployment); it.remove(K.lastStatus); it.remove(K.capability)
+        it.remove(K.wireApi); it.remove(K.responsesFor); it.remove(K.reasoning)
     }
 
     suspend fun setNyroMode(on: Boolean) = store.edit { it[K.nyroMode] = on }

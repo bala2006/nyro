@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.nyro.companion.NyroApp
 import com.nyro.companion.data.ProviderConfig
 import com.nyro.companion.data.ProviderType
+import com.nyro.companion.data.WireApi
 import com.nyro.companion.ui.components.SectionLabel
 import com.nyro.companion.ui.theme.GlassCard
 import com.nyro.companion.ui.theme.Nyro
@@ -57,6 +58,8 @@ fun ProviderScreen(onBack: () -> Unit) {
     var deployment by remember { mutableStateOf(saved.provider.deployment) }
     var apiVersion by remember { mutableStateOf(saved.provider.apiVersion) }
     var vision by remember { mutableStateOf(saved.provider.visionDeployment) }
+    var wireApi by remember { mutableStateOf(saved.provider.wireApi) }
+    var effort by remember { mutableStateOf(saved.provider.reasoningEffort) }
     var key by remember { mutableStateOf("") }
     val hasKey = remember { mutableStateOf(g.keys.hasApiKey()) }
     var showKey by remember { mutableStateOf(false) }
@@ -65,7 +68,11 @@ fun ProviderScreen(onBack: () -> Unit) {
     var testing by remember { mutableStateOf(false) }
     var ok by remember { mutableStateOf<Boolean?>(null) }
 
-    fun cfg() = ProviderConfig(type, endpoint.trim(), deployment.trim(), apiVersion.trim(), vision.trim())
+    fun cfg() = ProviderConfig(
+        type, endpoint.trim(), deployment.trim(), apiVersion.trim(), vision.trim(),
+        wireApi = wireApi, reasoningEffort = effort,
+        responsesDetectedFor = g.settings.current.provider.responsesDetectedFor,
+    )
 
     suspend fun save(): String? {
         g.ai.validate(cfg())?.let { return it }
@@ -105,6 +112,21 @@ fun ProviderScreen(onBack: () -> Unit) {
         Field(if (type == ProviderType.AZURE_OPENAI) "Deployment name" else "Deployment / model name", deployment, { deployment = it }, "e.g. gpt-4o")
         if (type != ProviderType.AZURE_OPENAI_V1) Field("API version", apiVersion, { apiVersion = it }, ProviderConfig.DEFAULT_API_VERSION)
         Field("Vision deployment (optional)", vision, { vision = it }, "Leave empty if the main deployment supports images")
+        SectionLabel("Request API")
+        Chips(WireApi.entries.map { it.label }, WireApi.entries.indexOf(wireApi)) { wireApi = WireApi.entries[it] }
+        Text(
+            when (wireApi) {
+                WireApi.AUTO -> "Starts with Chat Completions and switches to the Responses API automatically when the model requires it for tool calling (e.g. GPT-5.6+ / GPT-6 reasoning models)."
+                WireApi.CHAT -> "Always Chat Completions. Reasoning models that refuse tools here get reasoning_effort=none."
+                WireApi.RESPONSES -> "Always the Responses API at {endpoint}/openai/v1/responses (stateless, store=false)."
+            } + if (g.settings.current.provider.responsesDetectedFor.isNotBlank()) "\nDetected: ${g.settings.current.provider.responsesDetectedFor} uses the Responses API." else "",
+            color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp),
+        )
+        SectionLabel("Reasoning effort")
+        val efforts = listOf("" to "Default", "none" to "None", "minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High")
+        Chips(efforts.map { it.second }, efforts.indexOfFirst { it.first == effort }.coerceAtLeast(0)) { effort = efforts[it].first }
+        Text("Lower effort answers faster; higher effort plans multi-step phone tasks more carefully. Ignored by models without reasoning.",
+            color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp))
         OutlinedTextField(
             value = key, onValueChange = { key = it }, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
             label = { Text(if (hasKey.value) "API key (saved — enter to replace)" else "API key") },
@@ -157,6 +179,7 @@ fun ProviderScreen(onBack: () -> Unit) {
             scope.launch {
                 g.keys.clear(); g.settings.clearProvider(); hasKey.value = false
                 endpoint = ""; deployment = ""; vision = ""; key = ""; apiVersion = ProviderConfig.DEFAULT_API_VERSION
+                wireApi = WireApi.AUTO; effort = ""
                 status = "Credentials cleared from this phone."; capability = ""; ok = null
             }
         }) { Text("Clear credentials", color = Nyro.Danger) }
@@ -170,10 +193,26 @@ fun ProviderScreen(onBack: () -> Unit) {
                 )
                 Gap(6)
                 Text(
-                    "NYRO needs a chat model that supports tool (function) calling, e.g. GPT-4o, GPT-4.1 or newer. Image input is needed for screenshot understanding.",
+                    "NYRO needs a model that supports tool (function) calling. Newer reasoning models (GPT-5.6+, GPT-6) only allow tools through the Responses API; Auto handles this. Image input is needed for screenshot understanding.",
                     color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall,
                 )
             }
+        }
+    }
+}
+
+@OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun Chips(labels: List<String>, selected: Int, onPick: (Int) -> Unit) {
+    androidx.compose.foundation.layout.FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+    ) {
+        labels.forEachIndexed { i, l ->
+            androidx.compose.material3.FilterChip(
+                selected = i == selected, onClick = { onPick(i) }, label = { Text(l) },
+                colors = androidx.compose.material3.FilterChipDefaults.filterChipColors(selectedContainerColor = Nyro.Cyan.copy(alpha = 0.25f), selectedLabelColor = Nyro.TextHi),
+            )
         }
     }
 }
