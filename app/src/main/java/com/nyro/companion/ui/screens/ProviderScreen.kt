@@ -71,7 +71,6 @@ fun ProviderScreen(onBack: () -> Unit) {
     fun cfg() = ProviderConfig(
         type, endpoint.trim(), deployment.trim(), apiVersion.trim(), vision.trim(),
         wireApi = wireApi, reasoningEffort = effort,
-        responsesDetectedFor = g.settings.current.provider.responsesDetectedFor,
     )
 
     suspend fun save(): String? {
@@ -119,7 +118,7 @@ fun ProviderScreen(onBack: () -> Unit) {
                 WireApi.AUTO -> "Uses the Responses API for GPT-5.6 and GPT-6 deployments (name them after the model, e.g. gpt-6-luna). Other models use Chat Completions and switch on demand if tool calls need it."
                 WireApi.CHAT -> "Always Chat Completions. Reasoning models that refuse tools here get reasoning_effort=none."
                 WireApi.RESPONSES -> "Always the Responses API at {endpoint}/openai/v1/responses (stateless, store=false)."
-            } + if (g.settings.current.provider.responsesDetectedFor.isNotBlank()) "\nDetected: ${g.settings.current.provider.responsesDetectedFor} uses the Responses API." else "",
+            },
             color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp),
         )
         SectionLabel("Reasoning effort")

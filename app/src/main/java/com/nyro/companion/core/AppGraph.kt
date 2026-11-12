@@ -32,7 +32,7 @@ class AppGraph(val app: Application) {
     val keys = SecureKeyStore(app)
     val db = NyroDatabase.create(app)
     val dao = db.dao()
-    val ai = AzureClient(keyProvider = { keys.getApiKey() }, onResponsesRequired = { settings.markResponsesRequired(it) })
+    val ai = AzureClient(keyProvider = { keys.getApiKey() })
     val device = DeviceInfo(app)
     val apps = AppCatalog(app)
     val tools = ToolRegistry()
