@@ -35,6 +35,7 @@ import com.nyro.companion.ui.theme.Nyro
 import com.nyro.companion.ui.theme.NyroTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -80,6 +81,9 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         addEffects()
         addOrb()
         addConfirm()
+        lifecycleScope.launch {
+            g.agent.state.map { it.confirmation != null }.distinctUntilChanged().collect { setConfirmVisible(it) }
+        }
         UiFeedback.host = this
         g.voice.warmUp()
         lifecycleScope.launch {
@@ -305,7 +309,16 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
             setContent { NyroTheme { ConfirmOverlay() } }
         }
-        wm.addView(confirmView, confirmParams)
+    }
+
+    private var confirmAttached = false
+
+    /** Attaches the approval window only while an approval is pending, and removes it when answered. */
+    private fun setConfirmVisible(on: Boolean) {
+        val v = confirmView ?: return
+        if (on == confirmAttached) return
+        confirmAttached = on
+        if (on) runCatching { wm.addView(v, confirmParams) } else runCatching { wm.removeView(v) }
     }
 
     // ---------------- OverlayHost ----------------

@@ -44,6 +44,22 @@ object ScreenSession {
 private fun needSvc(): NyroAccessibilityService? = ScreenSession.svc()
 private fun noSvc() = ToolResult.fail(Requirement.ACCESSIBILITY.label)
 
+/**
+ * Ranks text matches for tap_text. An exact label on an enabled, clickable button beats a message
+ * bubble or a long sentence that merely contains the word (e.g. "send" inside a chat message).
+ */
+private fun score(e: UiElement, q: String): Int {
+    val t = e.text.lowercase(); val d = e.desc.lowercase()
+    var s = 0
+    if (t == q || d == q) s += 100
+    if (e.clickable) s += 30
+    if (e.role == "Button" || e.role == "ImageButton") s += 15
+    if (e.editable) s -= 10
+    if (t.length > q.length * 3 + 10) s -= 25
+    if (!e.enabled) s -= 40
+    return s
+}
+
 private fun label(e: UiElement) = e.text.ifBlank { e.desc }.ifBlank { e.viewId }.ifBlank { e.role }
 
 fun screenTools(): List<Tool> = listOf(
@@ -57,7 +73,7 @@ fun screenTools(): List<Tool> = listOf(
             val svc = needSvc() ?: return noSvc()
             UiFeedback.scan()
             svc.waitForIdle(quietMs = 250, timeoutMs = 1500)
-            return ToolResult(ScreenSession.read(svc).render(140))
+            return ToolResult(ScreenSession.read(svc).render(220))
         }
     },
 
@@ -123,8 +139,7 @@ fun screenTools(): List<Tool> = listOf(
             val before = snap.signature
             fun m(s: String) = if (exact) s.lowercase() == q else s.lowercase().contains(q)
             val e = snap.elements.filter { m(it.text) || m(it.desc) }
-                .sortedWith(compareByDescending<UiElement> { it.text.equals(q, true) || it.desc.equals(q, true) }.thenByDescending { it.clickable })
-                .firstOrNull() ?: return ToolResult.fail("No element with text \"$q\" on screen.\n" + snap.render(60))
+                .maxByOrNull { score(it, q) } ?: return ToolResult.fail("No element with text \"$q\" on screen.\n" + snap.render(60))
             UiFeedback.focus(e.bounds)
             if (!ScreenReader.clickNode(e.node)) {
                 if (!svc.tap(e.bounds.exactCenterX(), e.bounds.exactCenterY())) return ToolResult.fail("Tap failed.")

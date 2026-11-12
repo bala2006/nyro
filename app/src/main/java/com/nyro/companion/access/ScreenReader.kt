@@ -68,7 +68,7 @@ data class ScreenSnapshot(
 
 object ScreenReader {
     private const val MAX_NODES = 1500
-    private const val MAX_ELEMENTS = 160
+    private const val MAX_ELEMENTS = 260
 
     fun pickRoot(svc: NyroAccessibilityService): AccessibilityNodeInfo? {
         val own = svc.packageName
@@ -181,7 +181,11 @@ object ScreenReader {
 
     /** Ensures the node is still on screen; returns a fresh equivalent from [fresh] if needed. */
     fun resolve(e: UiElement, fresh: ScreenSnapshot?): UiElement? {
-        if (e.node.refresh() && e.node.isVisibleToUser) return e
+        if (e.node.refresh() && e.node.isVisibleToUser) {
+            // The bounds captured at read time can be stale after a scroll or animation: use the node's current bounds.
+            val b = Rect(); e.node.getBoundsInScreen(b)
+            return e.copy(bounds = b)
+        }
         fresh ?: return null
         return fresh.elements.firstOrNull { it.viewId == e.viewId && it.text == e.text && it.desc == e.desc && it.viewId.isNotEmpty() }
             ?: fresh.elements.firstOrNull { it.text == e.text && it.desc == e.desc && it.role == e.role && (it.text.isNotEmpty() || it.desc.isNotEmpty()) }
