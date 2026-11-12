@@ -174,7 +174,7 @@ fun ConfirmOverlay() {
             (if (c.risk == com.nyro.companion.tools.Risk.HIGH) "HIGH-RISK ACTION" else "CONFIRM ACTION") + (app?.let { " · $it" } ?: ""),
             style = MaterialTheme.typography.labelSmall, color = accent,
         )
-        Text(c.text, style = MaterialTheme.typography.bodyMedium, color = Nyro.TextHi, maxLines = 4)
+        Text(c.text, style = MaterialTheme.typography.bodyMedium, color = Nyro.TextHi, maxLines = 6)
         Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { g.agent.answerConfirmation(false) }) { Text("Don't", color = Nyro.TextHi) }
             Button(

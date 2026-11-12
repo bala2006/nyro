@@ -177,7 +177,10 @@ fun screenTools(): List<Tool> = listOf(
         override fun assess(args: Args): RiskAssessment {
             val pkg = ScreenSession.last?.packageName.orEmpty()
             if (SensitiveUi.isFinancial(pkg)) return RiskAssessment(Risk.HIGH, "Type into a financial app ($pkg)")
-            return if (args.bool("submit") == true) RiskAssessment(Risk.LOW, describe(args) + " and submit") else RiskAssessment(Risk.LOW, describe(args))
+            // Submitting a message is a send: preview the exact text and ask. Search boxes stay low risk.
+            val isSearch = ScreenSession.last?.elements?.any { it.editable && (it.text + it.desc + it.viewId).contains("search", true) } == true
+            return if (args.bool("submit") == true && !isSearch) RiskAssessment(Risk.MEDIUM, "Type and send \"${args.str("text")?.take(200)}\"")
+            else RiskAssessment(Risk.LOW, describe(args))
         }
         override suspend fun run(args: Args): ToolResult {
             val svc = needSvc() ?: return noSvc()
@@ -189,6 +192,7 @@ fun screenTools(): List<Tool> = listOf(
                 ?: snap.elements.firstOrNull { it.editable }?.node
                 ?: return ToolResult.fail("No input field found on screen. Tap the search/input control first.")
             if (target.isPassword) return ToolResult.fail("NYRO never types into password fields. Ask the user to enter it themselves.")
+            val previousText = target.text?.toString().orEmpty()
             val r = android.graphics.Rect().also { target.getBoundsInScreen(it) }
             UiFeedback.focus(r)
             UiFeedback.typing(r)
@@ -218,7 +222,9 @@ fun screenTools(): List<Tool> = listOf(
                     else -> note += " Submitted with the keyboard action (field now: \"${after.take(40)}\")."
                 }
             }
-            return ScreenSession.observe(svc, before, note)
+            return ScreenSession.observe(svc, before, note).copy(undo = {
+                if (target.refresh()) ScreenReader.setText(target, previousText)
+            })
         }
     },
 

@@ -48,7 +48,9 @@ fun ActivityScreen(go: (String) -> Unit) {
     val st by g.agent.state.collectAsStateWithLifecycle()
     val usage by g.usage.state.collectAsStateWithLifecycle()
     val settings by g.settings.settings.collectAsStateWithLifecycle()
-    val lastSent by g.agent.lastSent.collectAsStateWithLifecycle()
+    val sentLog by g.agent.sentLog.collectAsStateWithLifecycle()
+    val undoLabel by g.agent.undoLabel.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
     val paused by g.agent.paused.collectAsStateWithLifecycle()
     var editPrices by remember { mutableStateOf(false) }
 
@@ -63,6 +65,7 @@ fun ActivityScreen(go: (String) -> Unit) {
                         OutlinedButton(onClick = { g.agent.togglePause() }) { Text(if (paused) "Resume" else "Pause") }
                         OutlinedButton(onClick = { g.agent.stop() }) { Text("Stop", color = Nyro.Danger) }
                     }
+                    undoLabel?.let { label -> OutlinedButton(onClick = { scope.launch { g.agent.undoLast() } }) { Text("Undo: $label") } }
                 }
             } else {
                 Text("Idle. Each step NYRO takes appears here while it works.", color = Nyro.TextMid, style = MaterialTheme.typography.bodyMedium)
@@ -98,7 +101,8 @@ fun ActivityScreen(go: (String) -> Unit) {
         SectionLabel("Privacy")
         GlassCard(Modifier.fillMaxWidth()) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(lastSent.ifBlank { "Nothing has been sent to Azure yet." }, color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                if (sentLog.isEmpty()) Text("Nothing has been sent to Azure yet.", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                sentLog.take(5).forEach { Text(it, color = Nyro.TextHi, style = MaterialTheme.typography.bodySmall) }
                 Text(
                     "Your screen content is sent only when a task needs it. Screenshots are sent only when accessibility data isn't enough.",
                     color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall,

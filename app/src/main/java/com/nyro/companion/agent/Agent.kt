@@ -3,6 +3,7 @@ package com.nyro.companion.agent
 import com.nyro.companion.ai.AiErrorKind
 import com.nyro.companion.ai.AiException
 import com.nyro.companion.ai.RAW_ITEMS_KEY
+import com.nyro.companion.access.NyroAccessibilityService
 import com.nyro.companion.ai.Msg
 import com.nyro.companion.ai.ToolCall
 import com.nyro.companion.core.AppGraph
@@ -13,6 +14,7 @@ import com.nyro.companion.data.TaskEntity
 import com.nyro.companion.overlay.UiFeedback
 import com.nyro.companion.tools.Risk
 import com.nyro.companion.tools.ScreenSession
+import com.nyro.companion.tools.Tool
 import com.nyro.companion.tools.ToolResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -78,6 +80,13 @@ class Agent(private val g: AppGraph) {
     /** Messages of the current private session, kept in memory only. */
     val privateMessages: StateFlow<List<MessageEntity>> = _privateMessages
     private val _paused = MutableStateFlow(false)
+    private val undoStack = ArrayList<Pair<String, suspend () -> Unit>>()
+    private val _undoLabel = MutableStateFlow<String?>(null)
+    /** Label of the action Undo would reverse, or null. */
+    val undoLabel: StateFlow<String?> = _undoLabel
+    private val _sentLog = MutableStateFlow<List<String>>(emptyList())
+    /** Recent requests sent to Azure, newest first (privacy log). */
+    val sentLog: StateFlow<List<String>> = _sentLog
     val paused: StateFlow<Boolean> = _paused
 
     private val _lastSent = MutableStateFlow("")
@@ -211,7 +220,7 @@ class Agent(private val g: AppGraph) {
                 }
                 _state.update { it.copy(phase = Phase.THINKING, reply = "") }
                 compactIfNeeded(messages, log)
-                _lastSent.value = sentSummary(messages)
+                recordSent(messages)
                 UiFeedback.status(null)
                 g.usage.turnStarted()
                 val onDelta = { d: String ->
@@ -327,7 +336,7 @@ class Agent(private val g: AppGraph) {
         UiFeedback.setExecuting(true)
         if (tool.touchesScreen) UiFeedback.collapseForAction()
         UiFeedback.status(label)
-        val result = try {
+        val firstResult = try {
             withTimeout(TOOL_TIMEOUT_MS) { tool.run(args) }
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             // A slow tool is a tool failure, not a user cancellation.
@@ -337,7 +346,13 @@ class Agent(private val g: AppGraph) {
         } catch (e: Exception) {
             ToolResult.fail("${tool.name} crashed: ${e.javaClass.simpleName} ${e.message.orEmpty()}")
         }
-        updateStep(stepNo, if (result.ok) StepStatus.DONE else StepStatus.FAILED, if (result.ok) "" else result.text.removePrefix("FAILED: ").lineSequence().first().take(140))
+        val result = withRecovery(tool, firstResult)
+        if (result.ok) result.undo?.let { pushUndo(label) { it() } }
+        // Verification: a successful action whose screen did not change is flagged, not reported as clean success.
+        val detail = if (result.ok) {
+            if (result.text.contains("Screen changed: NO")) "Done, but the screen did not visibly change" else ""
+        } else result.text.removePrefix("FAILED: ").lineSequence().first().take(140)
+        updateStep(stepNo, if (result.ok) StepStatus.DONE else StepStatus.FAILED, detail)
         log.append(if (result.ok) "✓ " else "✗ ").append(label).append('\n')
         return result
     }
@@ -403,10 +418,38 @@ class Agent(private val g: AppGraph) {
     private fun updateStep(id: Int, status: StepStatus, detail: String) =
         _state.update { st -> st.copy(steps = st.steps.map { if (it.id == id) it.copy(status = status, detail = detail) else it }) }
 
-    private fun sentSummary(messages: List<JsonObject>): String {
+    private fun recordSent(messages: List<JsonObject>) {
         val images = messages.count { it["content"] is JsonArray }
-        return "Last request to Azure: ${messages.size} messages, $images with screenshots, about " +
-            "%,d tokens before caching.".format(estimateTokens(messages))
+        val time = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val line = "$time · ${messages.size} messages, $images with screenshots, about " +
+            "%,d tokens before caching".format(estimateTokens(messages))
+        _lastSent.value = "Last request to Azure: " + line.substringAfter("· ")
+        _sentLog.update { (listOf(line) + it).take(10) }
+    }
+
+    private fun pushUndo(label: String, action: suspend () -> Unit) {
+        undoStack += label to action
+        _undoLabel.value = label
+    }
+
+    /** Reverses the most recent reversible action. Taps and sent messages can't be reversed. */
+    suspend fun undoLast(): String {
+        val (label, action) = undoStack.removeLastOrNull() ?: return "Nothing to undo."
+        _undoLabel.value = undoStack.lastOrNull()?.first
+        return try {
+            action()
+            "Undone: $label."
+        } catch (e: Exception) {
+            "Could not undo $label: ${e.message ?: e.javaClass.simpleName}."
+        }
+    }
+
+    /** After a screen action fails because the element moved, re-read the screen so the model gets current ids. */
+    private suspend fun withRecovery(tool: Tool, r: ToolResult): ToolResult {
+        if (r.ok || !tool.touchesScreen || !r.text.contains("no longer on screen")) return r
+        val svc = NyroAccessibilityService.current ?: return r
+        val fresh = ScreenSession.read(svc).render(220)
+        return ToolResult(r.text + "\nRecovery: the screen was re-read. Use these current element ids:\n" + fresh)
     }
 
     /** Rough token count: about 4 characters per token, about 1000 per image, plus encrypted reasoning. */

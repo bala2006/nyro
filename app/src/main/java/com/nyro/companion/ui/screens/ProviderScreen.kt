@@ -122,9 +122,9 @@ fun ProviderScreen(onBack: () -> Unit) {
             color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp),
         )
         SectionLabel("Reasoning effort")
-        val efforts = listOf("" to "Auto", "none" to "None", "low" to "Low", "medium" to "Medium", "high" to "High")
+        val efforts = listOf("" to "Auto", "none" to "Fast", "low" to "Balanced", "medium" to "Thorough", "high" to "Deep")
         Chips(efforts.map { it.second }, efforts.indexOfFirst { it.first == effort }.coerceAtLeast(0)) { effort = efforts[it].first }
-        Text("Auto uses None for GPT-6 Luna and Sol: the fastest setting, and function tools work. Other models get no setting. Higher levels plan more carefully but respond more slowly.",
+        Text("Fast: no reasoning, best for phone actions. Balanced: light reasoning. Thorough and Deep: more planning, slower. Auto picks Fast for GPT-6 Luna and Sol and sends no setting to other models.",
             color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp))
         OutlinedTextField(
             value = key, onValueChange = { key = it }, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),

@@ -79,6 +79,26 @@ fun PermissionsScreen(onBack: () -> Unit) {
     val appDetails = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${ctx.packageName}"))
 
     ScreenFrame("Permissions", onBack) {
+        val steps = listOf(
+            Triple("Display over other apps", p.overlay) { open(NyroApp.graph.mode.overlaySettingsIntent()) },
+            Triple("Microphone", p.mic) { runtime.launch(arrayOf(Manifest.permission.RECORD_AUDIO)) },
+            Triple("Phone control (Accessibility)", p.accessibility) { open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+            Triple("Notifications", p.postNotif) { runtime.launch(arrayOf(Manifest.permission.POST_NOTIFICATIONS)) },
+            Triple("Unrestricted battery", p.batteryUnrestricted) { open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) },
+        )
+        val next = steps.withIndex().firstOrNull { !it.value.second }
+        GlassCard(Modifier.fillMaxWidth(), accent = Nyro.Cyan.copy(alpha = 0.4f), padding = 14) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (next == null) {
+                    Text("Setup complete", color = Nyro.Ok, style = MaterialTheme.typography.titleSmall)
+                    Text("All required permissions are granted.", color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Text("Step ${next.index + 1} of ${steps.size}: ${next.value.first}", color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall)
+                    FilledTonalButton(onClick = { next.value.third() }) { Text("Do this step") }
+                }
+            }
+        }
+        Gap(12)
         Text(
             "NYRO only asks for what each capability needs. Everything runs on this phone; only your requests, and screen content when a task needs it, go to your Azure endpoint.",
             color = Nyro.TextMid, style = MaterialTheme.typography.bodyMedium,
