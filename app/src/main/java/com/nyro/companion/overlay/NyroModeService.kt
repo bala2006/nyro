@@ -33,6 +33,7 @@ import com.nyro.companion.access.ScreenCaptureManager
 import com.nyro.companion.ui.MainActivity
 import com.nyro.companion.ui.theme.NyroTheme
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -84,6 +85,12 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
                 g.agent.state, g.voice.speaking, UiFeedback.statusText, UiFeedback.notice, g.usage.state,
             ) { st, speaking, tool, notice, u -> pillFor(st, speaking, tool, notice, u) }
                 .collect { (text, sub, color) -> effects?.setStatus(text, sub, color) }
+        }
+        // The top pill is visible while NYRO is busy (task, listening, approval, speaking, notice).
+        lifecycleScope.launch {
+            kotlinx.coroutines.flow.combine(g.agent.state, g.voice.speaking, UiFeedback.notice) { st, speaking, notice ->
+                st.taskActive || st.phase == com.nyro.companion.agent.Phase.LISTENING || st.confirmation != null || speaking || notice != null
+            }.distinctUntilChanged().collect { busy -> effects?.setBusy(busy) }
         }
         lifecycleScope.launch {
             UiFeedback.notice.collect { n -> if (n != null) { delay(2600); if (UiFeedback.notice.value == n) UiFeedback.notice(null) } }
@@ -301,6 +308,9 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     override fun showTap(x: Float, y: Float, long: Boolean) { main.post { effects?.tap(x, y, long) } }
     override fun showSwipe(x1: Float, y1: Float, x2: Float, y2: Float) { main.post { effects?.swipe(x1, y1, x2, y2) } }
     override fun highlight(r: Rect) { main.post { effects?.highlight(r) } }
+    override fun focus(r: Rect) { main.post { effects?.focus(r) } }
+    override fun typing(r: Rect) { main.post { effects?.typing(r) } }
+    override fun scan() { main.post { effects?.scan() } }
     override fun setExecuting(on: Boolean) { main.post { effects?.setExecuting(on) } }
     override fun expandPanel() { /* the approval card follows agent state; nothing to open */ }
 

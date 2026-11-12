@@ -9,6 +9,9 @@ interface OverlayHost {
     fun showTap(x: Float, y: Float, long: Boolean)
     fun showSwipe(x1: Float, y1: Float, x2: Float, y2: Float)
     fun highlight(r: Rect)
+    fun focus(r: Rect)
+    fun typing(r: Rect)
+    fun scan()
     fun setTouchPassThrough(on: Boolean)
     fun setExecuting(on: Boolean)
     suspend fun collapsePanel(): Boolean
@@ -31,6 +34,12 @@ object UiFeedback {
     fun showTap(x: Float, y: Float, long: Boolean = false) { host?.showTap(x, y, long) }
     fun showSwipe(x1: Float, y1: Float, x2: Float, y2: Float) { host?.showSwipe(x1, y1, x2, y2) }
     fun highlight(r: Rect) { host?.highlight(Rect(r)) }
+    /** Moves the focus ring to the element being acted on. */
+    fun focus(r: Rect) { host?.focus(Rect(r)) }
+    /** Shows the typing indicator on the input field. */
+    fun typing(r: Rect) { host?.typing(Rect(r)) }
+    /** Sweeps a scan line over the screen while NYRO reads it. */
+    fun scan() { host?.scan() }
     fun setTouchPassThrough(on: Boolean) { host?.setTouchPassThrough(on) }
     fun setExecuting(on: Boolean) { host?.setExecuting(on); if (!on) _status.value = null }
     fun status(text: String?) { _status.value = text }

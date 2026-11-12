@@ -55,6 +55,7 @@ fun screenTools(): List<Tool> = listOf(
         override fun describe(args: Args) = "Reading the screen"
         override suspend fun run(args: Args): ToolResult {
             val svc = needSvc() ?: return noSvc()
+            UiFeedback.scan()
             svc.waitForIdle(quietMs = 250, timeoutMs = 1500)
             return ToolResult(ScreenSession.read(svc).render(140))
         }
@@ -70,6 +71,7 @@ fun screenTools(): List<Tool> = listOf(
         override suspend fun run(args: Args): ToolResult {
             val svc = needSvc() ?: return noSvc()
             val q = args.str("query")!!.lowercase()
+            UiFeedback.scan()
             val snap = ScreenSession.read(svc)
             val hits = snap.elements.filter { (it.text + " " + it.desc + " " + it.viewId).lowercase().contains(q) }
             if (hits.isEmpty()) return ToolResult("No element matching \"$q\" on ${snap.appLabel}. ${snap.elements.size} elements visible; consider scrolling or take_screenshot.")
@@ -94,7 +96,7 @@ fun screenTools(): List<Tool> = listOf(
             val before = ScreenSession.last?.signature
             val e = ScreenReader.resolve(e0, ScreenSession.read(svc)) ?: return ToolResult.fail("Element \"${label(e0)}\" is no longer on screen. Read the screen again.")
             if (!e.enabled) return ToolResult.fail("Element \"${label(e)}\" is disabled.")
-            UiFeedback.highlight(e.bounds)
+            UiFeedback.focus(e.bounds)
             val how = if (ScreenReader.clickNode(e.node)) {
                 UiFeedback.showTap(e.bounds.exactCenterX(), e.bounds.exactCenterY()); "accessibility click"
             } else if (svc.tap(e.bounds.exactCenterX(), e.bounds.exactCenterY())) "gesture tap at ${e.bounds.centerX()},${e.bounds.centerY()}"
@@ -123,7 +125,7 @@ fun screenTools(): List<Tool> = listOf(
             val e = snap.elements.filter { m(it.text) || m(it.desc) }
                 .sortedWith(compareByDescending<UiElement> { it.text.equals(q, true) || it.desc.equals(q, true) }.thenByDescending { it.clickable })
                 .firstOrNull() ?: return ToolResult.fail("No element with text \"$q\" on screen.\n" + snap.render(60))
-            UiFeedback.highlight(e.bounds)
+            UiFeedback.focus(e.bounds)
             if (!ScreenReader.clickNode(e.node)) {
                 if (!svc.tap(e.bounds.exactCenterX(), e.bounds.exactCenterY())) return ToolResult.fail("Tap failed.")
             } else UiFeedback.showTap(e.bounds.exactCenterX(), e.bounds.exactCenterY())
@@ -143,7 +145,7 @@ fun screenTools(): List<Tool> = listOf(
             val e0 = ScreenSession.element(args.int("element_id")) ?: return ToolResult.fail("Unknown element id. Call read_screen first.")
             val before = ScreenSession.last?.signature
             val e = ScreenReader.resolve(e0, ScreenSession.read(svc)) ?: return ToolResult.fail("Element is no longer on screen.")
-            UiFeedback.highlight(e.bounds)
+            UiFeedback.focus(e.bounds)
             val ok = ScreenReader.longClickNode(e.node) || svc.longPress(e.bounds.exactCenterX(), e.bounds.exactCenterY())
             if (!ok) return ToolResult.fail("Long press failed.")
             return ScreenSession.observe(svc, before, "Long-pressed \"${label(e)}\".")
@@ -173,7 +175,8 @@ fun screenTools(): List<Tool> = listOf(
                 ?: return ToolResult.fail("No input field found on screen. Tap the search/input control first.")
             if (target.isPassword) return ToolResult.fail("NYRO never types into password fields. Ask the user to enter it themselves.")
             val r = android.graphics.Rect().also { target.getBoundsInScreen(it) }
-            UiFeedback.highlight(r)
+            UiFeedback.focus(r)
+            UiFeedback.typing(r)
             if (!ScreenReader.setText(target, text)) {
                 // Some fields only accept text after a tap gives them focus.
                 svc.tap(r.exactCenterX(), r.exactCenterY()); delay(300)
@@ -229,7 +232,7 @@ fun screenTools(): List<Tool> = listOf(
                 }
                 if (!ok) return ToolResult.fail("Scroll failed.")
                 how = "swipe gesture"
-            } else UiFeedback.highlight(target.bounds)
+            } else UiFeedback.focus(target.bounds)
             return ScreenSession.observe(svc, before, "Scrolled $dir ($how).")
         }
     },
@@ -314,6 +317,7 @@ fun screenTools(): List<Tool> = listOf(
         override suspend fun run(args: Args): ToolResult {
             val g = NyroApp.graph
             if (!g.settings.current.allowScreenshots) return ToolResult.fail("Screenshots are disabled in NYRO settings. Use read_screen instead.")
+            UiFeedback.scan()
             val bmp = captureScreen() ?: return ToolResult.fail(lastCaptureError)
             val (jpeg, scale, w, h) = encode(bmp)
             ScreenSession.shotScale = scale
