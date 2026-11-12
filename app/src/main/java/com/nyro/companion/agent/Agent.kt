@@ -69,6 +69,10 @@ class Agent(private val g: AppGraph) {
     val conversationId: StateFlow<Long?> = _conversationId
 
     private var job: Job? = null
+
+    private val _lastSent = MutableStateFlow("")
+    /** Plain-language summary of the most recent request sent to Azure (Privacy section on the Activity tab). */
+    val lastSent: StateFlow<String> = _lastSent
     @Volatile private var currentRequest = ""
     private var lastFromVoice = false
 
@@ -156,6 +160,7 @@ class Agent(private val g: AppGraph) {
             for (iteration in 0 until MAX_ITERATIONS) {
                 _state.update { it.copy(phase = Phase.THINKING, reply = "") }
                 compactIfNeeded(messages, log)
+                _lastSent.value = sentSummary(messages)
                 UiFeedback.status(null)
                 g.usage.turnStarted()
                 val onDelta = { d: String ->
@@ -344,6 +349,12 @@ class Agent(private val g: AppGraph) {
     private fun addStep(s: Step) = _state.update { it.copy(steps = it.steps + s) }
     private fun updateStep(id: Int, status: StepStatus, detail: String) =
         _state.update { st -> st.copy(steps = st.steps.map { if (it.id == id) it.copy(status = status, detail = detail) else it }) }
+
+    private fun sentSummary(messages: List<JsonObject>): String {
+        val images = messages.count { it["content"] is JsonArray }
+        return "Last request to Azure: ${messages.size} messages, $images with screenshots, about " +
+            "%,d tokens before caching.".format(estimateTokens(messages))
+    }
 
     /** Rough token count: about 4 characters per token, about 1000 per image, plus encrypted reasoning. */
     private fun estimateTokens(messages: List<JsonObject>): Int = messages.sumOf { m ->
