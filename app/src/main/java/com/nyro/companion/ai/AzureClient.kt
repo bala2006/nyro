@@ -535,7 +535,7 @@ class AzureClient(
             caps += if (turn.toolCalls.any { it.name == "ping" }) "Tools ✓" else "Tools ? (model answered without calling)"
             caps += "${ms}ms"
         } catch (e: AiException) {
-            return TestResult(false, e.message ?: "Connection failed", "")
+            return TestResult(false, "${diagnosisOf(e.kind)}: ${e.message ?: "Connection failed"}", "")
         }
 
         // Streaming probe
@@ -554,6 +554,22 @@ class AzureClient(
             if (e.kind == AiErrorKind.AUTH || e.kind == AiErrorKind.NETWORK) "Vision ?" else "Vision ✗"
         }
         return TestResult(true, "Connected to ${model ?: cfg.deployment}.", "Model: ${model ?: cfg.deployment} · " + caps.joinToString(" · "))
+    }
+
+    /** Names the part of the setup that failed, so the user knows where to look. */
+    private fun diagnosisOf(kind: AiErrorKind): String = when (kind) {
+        AiErrorKind.AUTH -> "Key"
+        AiErrorKind.DEPLOYMENT_NOT_FOUND -> "Deployment"
+        AiErrorKind.INVALID_ENDPOINT -> "Endpoint"
+        AiErrorKind.API_VERSION -> "API version"
+        AiErrorKind.QUOTA -> "Quota"
+        AiErrorKind.RATE_LIMIT -> "Rate limit"
+        AiErrorKind.NETWORK, AiErrorKind.TIMEOUT -> "Network"
+        AiErrorKind.CAPABILITY -> "Model capability"
+        AiErrorKind.CONTENT_FILTER -> "Content filter"
+        AiErrorKind.SERVER -> "Azure service"
+        AiErrorKind.NOT_CONFIGURED -> "Setup"
+        else -> "Request"
     }
 
     // ---------- Error mapping ----------

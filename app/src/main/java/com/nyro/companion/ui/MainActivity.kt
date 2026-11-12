@@ -39,6 +39,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.nyro.companion.NyroApp
 import com.nyro.companion.ui.screens.ActivityScreen
+import com.nyro.companion.ui.screens.CapabilitiesScreen
 import com.nyro.companion.ui.screens.ChatScreen
 import com.nyro.companion.ui.screens.DashboardScreen
 import com.nyro.companion.ui.screens.DeviceScreen
@@ -68,7 +69,7 @@ class MainActivity : ComponentActivity() {
 object Routes {
     const val HOME = "home"; const val CHAT = "chat"; const val ACTIVITY = "activity"; const val SETTINGS = "settings"
     const val TASKS = "tasks"; const val DEVICE = "device"; const val HISTORY = "history"; const val MEMORY = "memory"
-    const val PROVIDER = "provider"; const val PERMISSIONS = "permissions"
+    const val PROVIDER = "provider"; const val PERMISSIONS = "permissions"; const val CAPABILITIES = "capabilities"
 }
 
 /** The four top-level destinations. Everything else opens on top of them with a back arrow. */
@@ -106,6 +107,7 @@ private fun NyroNav() {
             composable(Routes.MEMORY) { MemoryScreen(back) }
             composable(Routes.PROVIDER) { ProviderScreen(back) }
             composable(Routes.PERMISSIONS) { PermissionsScreen(back) }
+            composable(Routes.CAPABILITIES) { CapabilitiesScreen(back, go) }
         }
         if (showTabs) {
             NavigationBar(containerColor = Nyro.Glass, tonalElevation = 0.dp) {

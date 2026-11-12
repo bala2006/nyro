@@ -228,6 +228,7 @@ fun memoryTools(): List<Tool> = listOf(
         override fun describe(args: Args) = "Remembering"
         override suspend fun run(args: Args): ToolResult {
             val f = args.str("fact")!!.trim()
+            if (g.agent.privateSession.value) return ToolResult("Not saved: this is a private session.")
             if (Redactor.containsSecret(f)) return ToolResult.fail("Refused: this looks like sensitive authentication or payment data, which NYRO never stores.")
             val id = g.dao.insertMemory(MemoryEntity(content = f.take(500), source = "assistant"))
             return ToolResult("Saved memory #$id.")
