@@ -73,6 +73,10 @@ data class NyroSettings(
     val allowScreenshots: Boolean = true,
     /** Dark is the default; false selects the light palette. */
     val darkTheme: Boolean = true,
+    /** Prices per 1M tokens, used only for the cost estimate on the Activity tab. Edit to match your Azure pricing. */
+    val priceInput: Float = 0.10f,
+    val priceCached: Float = 0.01f,
+    val priceOutput: Float = 0.50f,
     val orbX: Int = -1,
     val orbY: Int = 400,
     val lastConnectionStatus: String = "",
@@ -101,6 +105,9 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val confirmMedium = booleanPreferencesKey("confirm_medium")
         val allowShots = booleanPreferencesKey("allow_screenshots")
         val darkTheme = booleanPreferencesKey("dark_theme")
+        val priceIn = floatPreferencesKey("price_input")
+        val priceCached = floatPreferencesKey("price_cached")
+        val priceOut = floatPreferencesKey("price_output")
         val orbX = intPreferencesKey("orb_x")
         val orbY = intPreferencesKey("orb_y")
         val lastStatus = stringPreferencesKey("last_status")
@@ -135,6 +142,9 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         confirmMediumRisk = this[K.confirmMedium] ?: true,
         allowScreenshots = this[K.allowShots] ?: true,
         darkTheme = this[K.darkTheme] ?: true,
+        priceInput = this[K.priceIn] ?: 0.10f,
+        priceCached = this[K.priceCached] ?: 0.01f,
+        priceOutput = this[K.priceOut] ?: 0.50f,
         orbX = this[K.orbX] ?: -1,
         orbY = this[K.orbY] ?: 400,
         lastConnectionStatus = this[K.lastStatus] ?: "",
@@ -160,6 +170,9 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
 
     suspend fun setNyroMode(on: Boolean) = store.edit { it[K.nyroMode] = on }
     suspend fun setDarkTheme(on: Boolean) = store.edit { it[K.darkTheme] = on }
+    suspend fun savePrices(input: Float, cached: Float, output: Float) = store.edit {
+        it[K.priceIn] = input; it[K.priceCached] = cached; it[K.priceOut] = output
+    }
     suspend fun setConnectionStatus(status: String, capability: String) = store.edit {
         it[K.lastStatus] = status; it[K.capability] = capability
     }

@@ -8,9 +8,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
 data class UsageState(
-    /** All tokens used on this phone since install (reported by Azure). */
+    /** All tokens used on this phone since the counter was last reset (reported by Azure). */
     val total: Long = 0,
-    /** Tokens used by the current/last task. */
+    /** Input tokens, split into cached and uncached for cost estimates. */
+    val input: Long = 0,
+    val cached: Long = 0,
+    val output: Long = 0,
+    /** Tokens used by the current or last task. */
     val task: Long = 0,
     /** Output tokens per second of the latest model turn (live estimate while streaming). */
     val tokensPerSec: Float = 0f,
@@ -20,13 +24,19 @@ data class UsageState(
 )
 
 /**
- * Token accounting for the overlay. Exact numbers come from the usage Azure reports at the end
- * of each turn; while text is streaming, speed is estimated (~4 characters per token) and then
- * replaced with the real value.
+ * Token accounting for the overlay and the Activity tab. Exact numbers come from the usage Azure
+ * reports at the end of each turn; while text streams, speed is estimated and then replaced.
  */
 class UsageMeter(context: Context) {
     private val prefs = context.getSharedPreferences("nyro_usage", Context.MODE_PRIVATE)
-    private val _state = MutableStateFlow(UsageState(total = prefs.getLong("total", 0)))
+    private val _state = MutableStateFlow(
+        UsageState(
+            total = prefs.getLong("total", 0),
+            input = prefs.getLong("input", 0),
+            cached = prefs.getLong("cached", 0),
+            output = prefs.getLong("output", 0),
+        ),
+    )
     val state: StateFlow<UsageState> = _state
 
     private var turnStart = 0L
@@ -54,17 +64,28 @@ class UsageMeter(context: Context) {
             if (usage == null) return@update s.copy(streaming = false)
             // Reasoning models produce no visible text while thinking, so measure the whole turn.
             val secs = ((now - turnStart) / 1000f).coerceAtLeast(0.05f)
-            val newTotal = s.total + usage.total
-            prefs.edit().putLong("total", newTotal).apply()
-            s.copy(
-                total = newTotal, task = s.task + usage.total,
-                tokensPerSec = if (usage.output > 0) usage.output / secs else s.tokensPerSec, streaming = false,
+            val next = s.copy(
+                total = s.total + usage.total,
+                input = s.input + usage.input,
+                cached = s.cached + usage.cached,
+                output = s.output + usage.output,
+                task = s.task + usage.total,
+                tokensPerSec = if (usage.output > 0) usage.output / secs else s.tokensPerSec,
+                streaming = false,
                 cachePct = if (usage.input > 0) (usage.cached * 100 / usage.input).toInt() else s.cachePct,
             )
+            prefs.edit()
+                .putLong("total", next.total).putLong("input", next.input)
+                .putLong("cached", next.cached).putLong("output", next.output)
+                .apply()
+            next
         }
     }
 
-    fun reset() { prefs.edit().putLong("total", 0).apply(); _state.value = UsageState() }
+    fun reset() {
+        prefs.edit().clear().apply()
+        _state.value = UsageState()
+    }
 
     companion object {
         fun fmt(n: Long): String = when {
