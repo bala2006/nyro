@@ -35,6 +35,7 @@ import com.nyro.companion.ui.theme.Nyro
 import com.nyro.companion.ui.theme.NyroTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -80,6 +81,9 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         addEffects()
         addOrb()
         addConfirm()
+        lifecycleScope.launch {
+            g.agent.state.map { it.confirmation != null }.distinctUntilChanged().collect { setConfirmVisible(it) }
+        }
         UiFeedback.host = this
         g.voice.warmUp()
         lifecycleScope.launch {
@@ -291,8 +295,11 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
 
     /** Approval card, placed under the status pill. It is only sized while an action waits for approval. */
     private fun addConfirm() {
+        // A fixed width keeps the card fully on screen (wrap-content windows were clipped at the edge).
+        val dm = resources.displayMetrics
+        val cardWidth = minOf((340 * dm.density).toInt(), dm.widthPixels - (32 * dm.density).toInt())
         confirmParams = overlayParams(
-            WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+            cardWidth, WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -302,7 +309,16 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
             setContent { NyroTheme { ConfirmOverlay() } }
         }
-        wm.addView(confirmView, confirmParams)
+    }
+
+    private var confirmAttached = false
+
+    /** Attaches the approval window only while an approval is pending, and removes it when answered. */
+    private fun setConfirmVisible(on: Boolean) {
+        val v = confirmView ?: return
+        if (on == confirmAttached) return
+        confirmAttached = on
+        if (on) runCatching { wm.addView(v, confirmParams) } else runCatching { wm.removeView(v) }
     }
 
     // ---------------- OverlayHost ----------------

@@ -139,11 +139,7 @@ object Msg {
  */
 class AzureClient(
     private val keyProvider: () -> String?,
-    /** Persists that a deployment needs the Responses API (Auto mode). */
-    private val onResponsesRequired: suspend (String) -> Unit = {},
 ) {
-    /** Deployments detected this session as needing the Responses API (before the setting round-trips). */
-    private val forcedResponses = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
     private val http = OkHttpClient.Builder()
@@ -198,17 +194,11 @@ class AzureClient(
     /** The v1 Responses route works for Azure OpenAI and Foundry resources alike. */
     private fun responsesUrlFor(cfg: ProviderConfig): String = "${baseOf(cfg.endpoint)}/openai/v1/responses"
 
-    private fun wantsResponses(cfg: ProviderConfig, deployment: String) =
-        cfg.wireApi != WireApi.CHAT && (
-            cfg.useResponses(deployment) || deployment in forcedResponses ||
-                (cfg.wireApi == WireApi.AUTO && isGpt6Family(deployment))
-        )
-
-    /** The service's own hint that tool calling with this (reasoning) model must use /responses. */
-    private fun needsResponses(e: AiException): Boolean {
-        val m = e.message.orEmpty()
-        // Match on the message only: some gateways wrap the 400 or deliver it inside the stream.
-        return m.contains("/responses", true) || (m.contains("reasoning_effort", true) && m.contains("not supported", true))
+    /** One route per deployment, chosen from settings and the model name. There is no fallback between routes. */
+    private fun wantsResponses(cfg: ProviderConfig, deployment: String) = when (cfg.wireApi) {
+        WireApi.RESPONSES -> true
+        WireApi.CHAT -> false
+        WireApi.AUTO -> isGpt6Family(deployment)
     }
 
     // ---------- Requests ----------
@@ -230,29 +220,11 @@ class AzureClient(
     ): AiTurn {
         validate(cfg)?.let { throw AiException(AiErrorKind.INVALID_ENDPOINT, it) }
         val key = keyProvider() ?: throw AiException(AiErrorKind.NOT_CONFIGURED, "No API key saved. Add it in Settings → AI Provider.")
-
-        if (wantsResponses(cfg, deployment)) {
-            return try {
-                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens, cacheKey) }
-            } catch (e: AiException) {
-                // Endpoint has no Responses route (e.g. a gateway): fall back to chat with reasoning disabled.
-                if (cfg.wireApi == WireApi.AUTO && e.httpCode == 404) {
-                    send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, effortFor(cfg, deployment, forceNone = tools != null), cacheKey) }
-                } else throw e
-            }
-        }
-        return try {
+        // Single route, no retries on another API or model. Errors are reported as they are.
+        return if (wantsResponses(cfg, deployment)) {
+            send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens, cacheKey) }
+        } else {
             send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, effortFor(cfg, deployment), cacheKey) }
-        } catch (e: AiException) {
-            if (!needsResponses(e)) throw e
-            if (cfg.wireApi == WireApi.CHAT) {
-                // User pinned Chat Completions: the service allows tools only with reasoning disabled.
-                send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, effortFor(cfg, deployment, forceNone = true), cacheKey) }
-            } else {
-                forcedResponses += deployment
-                runCatching { onResponsesRequired(deployment) }
-                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens, cacheKey) }
-            }
         }
     }
 
