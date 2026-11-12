@@ -23,6 +23,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -84,6 +85,9 @@ class Agent(private val g: AppGraph) {
     private val _undoLabel = MutableStateFlow<String?>(null)
     /** Label of the action Undo would reverse, or null. */
     val undoLabel: StateFlow<String?> = _undoLabel
+    private val _mood = MutableStateFlow<String?>(null)
+    /** Short-lived mood for the orb after a task: "happy" or "confused". Null otherwise. */
+    val mood: StateFlow<String?> = _mood
     private val _sentLog = MutableStateFlow<List<String>>(emptyList())
     /** Recent requests sent to Azure, newest first (privacy log). */
     val sentLog: StateFlow<List<String>> = _sentLog
@@ -249,6 +253,7 @@ class Agent(private val g: AppGraph) {
                     val reply = turn.content.trim().ifEmpty { if (stepNo > 0) "Done." else "…" }
                     _state.update { it.copy(reply = reply) }
                     saveMessage(MessageEntity(conversationId = cid, role = "assistant", content = Redactor.redact(reply)))
+                    flashMood(if (_state.value.steps.any { it.status == StepStatus.FAILED }) "confused" else "happy")
                     taskId?.let { g.dao.finishTask(it, "completed", reply.take(400), log.toString()) }
                     finish(Phase.IDLE)
                     tts.awaitDone()
@@ -425,6 +430,11 @@ class Agent(private val g: AppGraph) {
             "%,d tokens before caching".format(estimateTokens(messages))
         _lastSent.value = "Last request to Azure: " + line.substringAfter("· ")
         _sentLog.update { (listOf(line) + it).take(10) }
+    }
+
+    private fun flashMood(v: String) {
+        _mood.value = v
+        g.scope.launch { delay(3000); if (_mood.value == v) _mood.value = null }
     }
 
     private fun pushUndo(label: String, action: suspend () -> Unit) {

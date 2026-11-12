@@ -15,6 +15,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.LifecycleService
@@ -81,6 +82,13 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         addEffects()
         addOrb()
         addConfirm()
+        addQuick()
+        lifecycleScope.launch {
+            g.settings.settings.map { it.orbOpacity }.distinctUntilChanged().collect { o ->
+                orbOpacity = o
+                orbView?.let { v -> orbParams.alpha = o; runCatching { wm.updateViewLayout(v, orbParams) } }
+            }
+        }
         lifecycleScope.launch {
             g.agent.state.map { it.confirmation != null }.distinctUntilChanged().collect { setConfirmVisible(it) }
         }
@@ -164,7 +172,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_nyro)
             .setContentTitle("NYRO Mode is on")
-            .setContentText("Tap the orb to talk. Long-press it to stop everything.")
+            .setContentText("Tap the orb to talk. Long-press it for quick actions.")
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(Notification.Action.Builder(null, "Talk", action(ACTION_LISTEN, 3)).build())
@@ -236,6 +244,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             gravity = Gravity.TOP or Gravity.START
             x = if (s.orbX < 0) dm.widthPixels - (88 * dm.density).toInt() else s.orbX
             y = s.orbY.coerceIn(0, dm.heightPixels - (120 * dm.density).toInt())
+            alpha = s.orbOpacity
         }
         orbView = ComposeView(this).owned().apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
@@ -243,7 +252,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
                 NyroTheme {
                     OrbOverlay(
                         onTap = { NyroApp.graph.agent.startListening() },
-                        onLongPress = { NyroApp.graph.agent.stop(); UiFeedback.notice("Stopped") },
+                        onLongPress = { toggleQuick() },
                         onDragStart = { dragStartX = orbParams.x; dragStartY = orbParams.y },
                         onDragBy = { dx, dy -> moveOrbTo(dragStartX + dx.toInt(), dragStartY + dy.toInt()) },
                         onDragEnd = { snapOrb() },
@@ -275,7 +284,8 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     private fun snapOrb() {
         val v = orbView ?: return
         val dm = resources.displayMetrics
-        val target = if (orbParams.x + v.width / 2 < dm.widthPixels / 2) 0 else dm.widthPixels - v.width
+        val target = if (!NyroApp.graph.settings.current.dockEdges) orbParams.x
+            else if (orbParams.x + v.width / 2 < dm.widthPixels / 2) 0 else dm.widthPixels - v.width
         val startX = orbParams.x
         lifecycleScope.launch {
             val frames = 10
@@ -321,6 +331,61 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         if (on) runCatching { wm.addView(v, confirmParams) } else runCatching { wm.removeView(v) }
     }
 
+    // ---------------- Quick actions and adaptive placement ----------------
+
+    private var orbOpacity = 1f
+    private val quickOpen = mutableStateOf(false)
+    private var quickView: ComposeView? = null
+    private var quickAttached = false
+    private lateinit var quickParams: WindowManager.LayoutParams
+    private val hideQuick = Runnable { setQuickOpen(false) }
+    private var keyboardOpen = false
+    private var savedOrbY = -1
+
+    private fun addQuick() {
+        val dm = resources.displayMetrics
+        val w = minOf((340 * dm.density).toInt(), dm.widthPixels - (32 * dm.density).toInt())
+        quickParams = overlayParams(
+            w, WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            y = statusBarHeight() + (112 * dm.density).toInt()
+        }
+        quickView = ComposeView(this).owned().apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
+            setContent { NyroTheme { if (quickOpen.value) QuickActions(onDone = { setQuickOpen(false) }) } }
+        }
+    }
+
+    /** Long-press on the orb toggles the quick action row. */
+    fun toggleQuick() = setQuickOpen(!quickOpen.value)
+
+    private fun setQuickOpen(on: Boolean) {
+        main.removeCallbacks(hideQuick)
+        quickOpen.value = on
+        val v = quickView ?: return
+        if (on && !quickAttached) { quickAttached = true; runCatching { wm.addView(v, quickParams) } }
+        if (!on && quickAttached) { quickAttached = false; runCatching { wm.removeView(v) } }
+        if (on) main.postDelayed(hideQuick, 8000)
+    }
+
+    /** Called by the accessibility service when the window list changes. Moves the orb above the keyboard. */
+    fun onKeyboardState(open: Boolean) {
+        if (open == keyboardOpen) return
+        keyboardOpen = open
+        val v = orbView ?: return
+        val dm = resources.displayMetrics
+        if (open && orbParams.y > dm.heightPixels / 2) {
+            savedOrbY = orbParams.y
+            orbParams.y = dm.heightPixels / 3
+        } else if (!open && savedOrbY >= 0) {
+            orbParams.y = savedOrbY
+            savedOrbY = -1
+        }
+        runCatching { wm.updateViewLayout(v, orbParams) }
+    }
+
     // ---------------- OverlayHost ----------------
 
     override fun showTap(x: Float, y: Float, long: Boolean) { main.post { effects?.tap(x, y, long) } }
@@ -337,7 +402,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             val v = orbView ?: return@post
             orbParams.flags = if (on) orbParams.flags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
             else orbParams.flags and WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE.inv()
-            orbParams.alpha = if (on) 0.8f else 1f
+            orbParams.alpha = if (on) 0.8f else orbOpacity
             runCatching { wm.updateViewLayout(v, orbParams) }
         }
     }
