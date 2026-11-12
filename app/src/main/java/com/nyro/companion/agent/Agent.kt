@@ -21,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -70,6 +71,15 @@ class Agent(private val g: AppGraph) {
 
     private var job: Job? = null
 
+    private val _private = MutableStateFlow(false)
+    /** Private session: nothing from it is written to history, tasks or memory. */
+    val privateSession: StateFlow<Boolean> = _private
+    private val _privateMessages = MutableStateFlow<List<MessageEntity>>(emptyList())
+    /** Messages of the current private session, kept in memory only. */
+    val privateMessages: StateFlow<List<MessageEntity>> = _privateMessages
+    private val _paused = MutableStateFlow(false)
+    val paused: StateFlow<Boolean> = _paused
+
     private val _lastSent = MutableStateFlow("")
     /** Plain-language summary of the most recent request sent to Azure (Privacy section on the Activity tab). */
     val lastSent: StateFlow<String> = _lastSent
@@ -77,6 +87,40 @@ class Agent(private val g: AppGraph) {
     private var lastFromVoice = false
 
     fun newConversation() { stop(); _conversationId.value = null; _state.value = AssistantState() }
+
+    fun startPrivateSession() {
+        stop(); _private.value = true; _privateMessages.value = emptyList(); _conversationId.value = PRIVATE_ID
+        _state.value = AssistantState()
+    }
+
+    fun endPrivateSession() {
+        stop(); _private.value = false; _privateMessages.value = emptyList(); _conversationId.value = null
+        _state.value = AssistantState()
+    }
+
+    /** Pause between steps. The current model call or tool finishes first; resume continues from the same point. */
+    fun togglePause() { _paused.value = !_paused.value }
+
+    private suspend fun awaitIfPaused(): Boolean {
+        if (!_paused.value) return false
+        _paused.first { !it }
+        return true
+    }
+
+    /** Writes go through these so a private session never touches the database. */
+    private suspend fun saveMessage(m: MessageEntity): Long {
+        if (_private.value) {
+            val id = -(_privateMessages.value.size + 1).toLong()
+            _privateMessages.update { it + m.copy(id = id) }
+            return id
+        }
+        return g.dao.insertMessage(m)
+    }
+
+    private suspend fun saveTask(t: TaskEntity): Long = if (_private.value) -1L else g.dao.insertTask(t)
+
+    private suspend fun priorMessages(cid: Long, n: Int): List<MessageEntity> =
+        if (_private.value) _privateMessages.value.takeLast(n) else g.dao.recentMessages(cid, n)
     fun openConversation(id: Long) { stop(); _conversationId.value = id; _state.value = AssistantState() }
 
     fun submit(text: String, fromVoice: Boolean = false) {
@@ -90,6 +134,7 @@ class Agent(private val g: AppGraph) {
 
     /** Emergency stop: cancels the task, speech and listening immediately. */
     fun stop() {
+        _paused.value = false
         job?.cancel(); job = null
         _state.value.confirmation?.answer?.complete(false)
         g.voice.stopSpeaking(); g.voice.stopListening()
@@ -132,7 +177,7 @@ class Agent(private val g: AppGraph) {
         g.usage.startTask()
         UiFeedback.status(null)
         val cid = ensureConversation(text)
-        g.dao.insertMessage(MessageEntity(conversationId = cid, role = "user", content = Redactor.redact(text)))
+        saveMessage(MessageEntity(conversationId = cid, role = "user", content = Redactor.redact(text)))
 
         val settings = g.settings.current
         val configured = settings.provider.isComplete && g.keys.hasApiKey()
@@ -143,7 +188,7 @@ class Agent(private val g: AppGraph) {
 
         val messages = ArrayList<JsonObject>()
         messages += Msg.system(systemPrompt())
-        g.dao.recentMessages(cid, 17).dropLast(1).forEach { m ->
+        priorMessages(cid, 17).dropLast(1).forEach { m ->
             messages += if (m.role == "user") Msg.user(m.content) else Msg.assistant(m.content)
         }
         // Phone state (time, foreground app, device, memories) goes after the request, so the
@@ -155,9 +200,15 @@ class Agent(private val g: AppGraph) {
         val log = StringBuilder()
         var stepNo = 0
         val tts = g.voice.streamingSpeaker(enabled = settings.speakReplies)
+        var resumedNote = false
 
         try {
             for (iteration in 0 until MAX_ITERATIONS) {
+                if (awaitIfPaused()) resumedNote = true
+                if (resumedNote) {
+                    messages += Msg.user("[NYRO was paused by the user. Re-read the screen before the next step; it may have changed.]")
+                    resumedNote = false
+                }
                 _state.update { it.copy(phase = Phase.THINKING, reply = "") }
                 compactIfNeeded(messages, log)
                 _lastSent.value = sentSummary(messages)
@@ -188,7 +239,7 @@ class Agent(private val g: AppGraph) {
                 if (turn.toolCalls.isEmpty()) {
                     val reply = turn.content.trim().ifEmpty { if (stepNo > 0) "Done." else "…" }
                     _state.update { it.copy(reply = reply) }
-                    g.dao.insertMessage(MessageEntity(conversationId = cid, role = "assistant", content = Redactor.redact(reply)))
+                    saveMessage(MessageEntity(conversationId = cid, role = "assistant", content = Redactor.redact(reply)))
                     taskId?.let { g.dao.finishTask(it, "completed", reply.take(400), log.toString()) }
                     finish(Phase.IDLE)
                     tts.awaitDone()
@@ -196,10 +247,11 @@ class Agent(private val g: AppGraph) {
                     return
                 }
 
-                if (taskId == null) taskId = g.dao.insertTask(TaskEntity(request = text, status = "running"))
+                if (taskId == null) taskId = saveTask(TaskEntity(request = text, status = "running"))
                 messages += Msg.assistantToolCalls(turn.content, turn.toolCalls, turn.rawItems)
                 val images = ArrayList<JsonObject>()
                 for (call in turn.toolCalls) {
+                    if (awaitIfPaused()) resumedNote = true
                     val toolStart = System.currentTimeMillis()
                     val result = execute(call, ++stepNo, log)
                     log.append("  tool ${System.currentTimeMillis() - toolStart} ms\n")
@@ -210,7 +262,7 @@ class Agent(private val g: AppGraph) {
             }
             val msg = "I stopped after $MAX_ITERATIONS steps without finishing. Tell me how you'd like to continue."
             _state.update { it.copy(reply = msg) }
-            g.dao.insertMessage(MessageEntity(conversationId = cid, role = "assistant", content = msg))
+            saveMessage(MessageEntity(conversationId = cid, role = "assistant", content = msg))
             taskId?.let { g.dao.finishTask(it, "failed", msg, log.toString()) }
             g.voice.speak(msg)
             finish(Phase.IDLE)
@@ -219,7 +271,7 @@ class Agent(private val g: AppGraph) {
             g.usage.turnFinished(null)
             withContext(NonCancellable) {
                 taskId?.let { g.dao.finishTask(it, "cancelled", "Stopped by user", log.toString()) }
-                g.dao.insertMessage(MessageEntity(conversationId = cid, role = "assistant", content = "(stopped)"))
+                saveMessage(MessageEntity(conversationId = cid, role = "assistant", content = "(stopped)"))
             }
             UiFeedback.setExecuting(false)
             throw e
@@ -311,7 +363,7 @@ class Agent(private val g: AppGraph) {
         }
         r?.tool?.let { addStep(Step(1, "Local: ${it.replace('_', ' ')}", StepStatus.DONE)) }
         _state.update { it.copy(reply = reply) }
-        g.dao.insertMessage(MessageEntity(conversationId = cid, role = "assistant", content = reply))
+        saveMessage(MessageEntity(conversationId = cid, role = "assistant", content = reply))
         finish(Phase.IDLE)
         if (g.settings.current.speakReplies) g.voice.speak(reply)
         return true
@@ -320,7 +372,7 @@ class Agent(private val g: AppGraph) {
     private suspend fun fail(cid: Long, msg: String) {
         _state.update { it.copy(phase = Phase.ERROR, error = msg, reply = it.reply.ifBlank { msg }, taskActive = false, confirmation = null) }
         UiFeedback.setExecuting(false)
-        withContext(NonCancellable) { g.dao.insertMessage(MessageEntity(conversationId = cid, role = "assistant", content = "⚠ $msg")) }
+        withContext(NonCancellable) { saveMessage(MessageEntity(conversationId = cid, role = "assistant", content = "⚠ $msg")) }
         if (g.settings.current.speakReplies) g.voice.speak("Sorry, " + msg.substringBefore('.').take(120))
         g.scope.launch {
             kotlinx.coroutines.delay(5000)
@@ -340,6 +392,7 @@ class Agent(private val g: AppGraph) {
     }
 
     private suspend fun ensureConversation(text: String): Long {
+        if (_private.value) { _conversationId.value = PRIVATE_ID; return PRIVATE_ID }
         _conversationId.value?.let { g.dao.touchConversation(it, text.take(60)); return it }
         val id = g.dao.insertConversation(ConversationEntity(title = Redactor.redact(text).take(60)))
         _conversationId.value = id
@@ -436,6 +489,7 @@ How you work:
 
     companion object {
         const val MAX_ITERATIONS = 30
+        const val PRIVATE_ID = -1L
         const val MAX_TOOL_CHARS = 9000
         const val TOOL_TIMEOUT_MS = 45_000L
         const val CONFIRM_TIMEOUT_MS = 90_000L

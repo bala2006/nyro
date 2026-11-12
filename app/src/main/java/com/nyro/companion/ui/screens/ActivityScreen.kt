@@ -49,6 +49,7 @@ fun ActivityScreen(go: (String) -> Unit) {
     val usage by g.usage.state.collectAsStateWithLifecycle()
     val settings by g.settings.settings.collectAsStateWithLifecycle()
     val lastSent by g.agent.lastSent.collectAsStateWithLifecycle()
+    val paused by g.agent.paused.collectAsStateWithLifecycle()
     var editPrices by remember { mutableStateOf(false) }
 
     ScreenFrame("Activity", onBack = null) {
@@ -58,7 +59,10 @@ fun ActivityScreen(go: (String) -> Unit) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(st.request, color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall)
                     StepList(st.steps)
-                    if (st.taskActive) OutlinedButton(onClick = { g.agent.stop() }) { Text("Stop", color = Nyro.Danger) }
+                    if (st.taskActive) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { g.agent.togglePause() }) { Text(if (paused) "Resume" else "Pause") }
+                        OutlinedButton(onClick = { g.agent.stop() }) { Text("Stop", color = Nyro.Danger) }
+                    }
                 }
             } else {
                 Text("Idle. Each step NYRO takes appears here while it works.", color = Nyro.TextMid, style = MaterialTheme.typography.bodyMedium)

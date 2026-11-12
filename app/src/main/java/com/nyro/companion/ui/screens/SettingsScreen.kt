@@ -64,6 +64,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
     ScreenFrame("Settings", onBack) {
         NavRow("AI Provider", s.provider.deployment.ifBlank { "Not configured" }) { go(Routes.PROVIDER) }
         NavRow("Permissions", "Overlay, phone control, microphone, notifications") { go(Routes.PERMISSIONS) }
+        NavRow("What NYRO can access", "A plain list of what works now and what needs setup") { go(Routes.CAPABILITIES) }
 
         Gap(12)
         SectionLabel("Appearance")

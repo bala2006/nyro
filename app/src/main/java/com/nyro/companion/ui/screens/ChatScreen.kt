@@ -22,6 +22,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Icon
@@ -58,7 +61,11 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
     val g = NyroApp.graph
     val cid by g.agent.conversationId.collectAsStateWithLifecycle()
     val messagesFlow = remember(cid) { cid?.let { g.dao.messages(it) } ?: flowOf(emptyList()) }
-    val messages by messagesFlow.collectAsStateWithLifecycle(emptyList())
+    val dbMessages by messagesFlow.collectAsStateWithLifecycle(emptyList())
+    val priv by g.agent.privateSession.collectAsStateWithLifecycle()
+    val privMessages by g.agent.privateMessages.collectAsStateWithLifecycle()
+    val paused by g.agent.paused.collectAsStateWithLifecycle()
+    val messages = if (priv) privMessages else dbMessages
     val st by g.agent.state.collectAsStateWithLifecycle()
     val speaking by g.voice.speaking.collectAsStateWithLifecycle()
     val mic by g.voice.micLevel.collectAsStateWithLifecycle()
@@ -80,9 +87,20 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
                 Text("NYRO", style = MaterialTheme.typography.titleMedium, color = Nyro.TextHi)
                 Text(orbLabel(orb) + if (st.localOnly) " · local mode" else "", style = MaterialTheme.typography.labelSmall, color = Nyro.Cyan)
             }
+            if (st.taskActive) IconButton(onClick = { g.agent.togglePause() }) {
+                Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, if (paused) "Resume" else "Pause", tint = Nyro.TextMid)
+            }
+            IconButton(onClick = { if (priv) g.agent.endPrivateSession() else g.agent.startPrivateSession() }) {
+                Icon(Icons.Default.Lock, if (priv) "End private session" else "Start private session", tint = if (priv) Nyro.Amber else Nyro.TextMid)
+            }
             IconButton(onClick = { g.agent.newConversation() }) { Icon(Icons.Default.Add, "New conversation", tint = Nyro.TextMid) }
         }
 
+        if (priv) Text(
+            "Private session: nothing from this chat is saved to history, tasks or memory.",
+            color = Nyro.Amber, style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp), state = list,
             verticalArrangement = Arrangement.spacedBy(10.dp),
