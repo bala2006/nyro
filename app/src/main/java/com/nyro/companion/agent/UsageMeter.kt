@@ -15,6 +15,8 @@ data class UsageState(
     /** Output tokens per second of the latest model turn (live estimate while streaming). */
     val tokensPerSec: Float = 0f,
     val streaming: Boolean = false,
+    /** Share of the last turn's input served from the prompt cache, 0..100. */
+    val cachePct: Int = 0,
 )
 
 /**
@@ -57,6 +59,7 @@ class UsageMeter(context: Context) {
             s.copy(
                 total = newTotal, task = s.task + usage.total,
                 tokensPerSec = if (usage.output > 0) usage.output / secs else s.tokensPerSec, streaming = false,
+                cachePct = if (usage.input > 0) (usage.cached * 100 / usage.input).toInt() else s.cachePct,
             )
         }
     }
