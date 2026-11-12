@@ -76,9 +76,11 @@ fun deviceTools(): List<Tool> = listOf(
         override fun describe(args: Args) = if (args.bool("on") == true) "Turning flashlight on" else "Turning flashlight off"
         override suspend fun run(args: Args): ToolResult {
             val id = g.device.hasFlashlight() ?: return ToolResult.fail("No flashlight on this device.")
+            val on = args.bool("on") == true
+            val cm = ctx.getSystemService(CameraManager::class.java)
             return runCatching {
-                ctx.getSystemService(CameraManager::class.java).setTorchMode(id, args.bool("on") == true)
-                ToolResult("Flashlight ${if (args.bool("on") == true) "on" else "off"}.")
+                cm.setTorchMode(id, on)
+                ToolResult("Flashlight ${if (on) "on" else "off"}.").copy(undo = { cm.setTorchMode(id, !on) })
             }.getOrElse { ToolResult.fail("Camera is in use or torch unavailable: ${it.message}") }
         }
     },
@@ -332,3 +334,10 @@ fun notificationTools(): List<Tool> = listOf(
 fun hasMediaPermission(): Boolean = listOf(
     android.Manifest.permission.READ_MEDIA_IMAGES, android.Manifest.permission.READ_MEDIA_VIDEO, android.Manifest.permission.READ_MEDIA_AUDIO,
 ).any { ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED }
+
+fun undoTools(): List<Tool> = listOf(
+    object : Tool("undo_last_action", "Undo the most recent reversible action (typed text, flashlight). Taps and sent messages can't be undone.") {
+        override fun describe(args: Args) = "Undoing the last action"
+        override suspend fun run(args: Args): ToolResult = ToolResult(g.agent.undoLast())
+    },
+)

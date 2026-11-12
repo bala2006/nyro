@@ -25,6 +25,8 @@ data class ToolResult(
     val ok: Boolean = true,
     /** Base64 JPEG to show the model (vision). */
     val imageJpeg: String? = null,
+    /** Reverses this action. Only set for actions that can be safely reversed (typed text, flashlight). */
+    val undo: (suspend () -> Unit)? = null,
 ) {
     companion object {
         fun fail(msg: String) = ToolResult("FAILED: $msg", ok = false)
