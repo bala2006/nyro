@@ -1,0 +1,387 @@
+package com.nyro.companion.ai
+
+import com.nyro.companion.data.ProviderConfig
+import com.nyro.companion.data.ProviderType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.IOException
+import java.io.InterruptedIOException
+import java.net.UnknownHostException
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.cancellation.CancellationException
+
+data class ToolCall(val id: String, val name: String, val arguments: String)
+
+data class AiTurn(
+    val content: String,
+    val toolCalls: List<ToolCall>,
+    val finishReason: String?,
+    val model: String?,
+)
+
+/** Failure categories surfaced to the user with a meaningful explanation. */
+enum class AiErrorKind { NOT_CONFIGURED, INVALID_ENDPOINT, AUTH, DEPLOYMENT_NOT_FOUND, API_VERSION, RATE_LIMIT, QUOTA, CAPABILITY, CONTENT_FILTER, NETWORK, TIMEOUT, SERVER, BAD_REQUEST, UNKNOWN }
+
+class AiException(val kind: AiErrorKind, message: String, val httpCode: Int = 0, val retryAfterSec: Int = 0) : Exception(message)
+
+object Msg {
+    fun system(text: String) = buildJsonObject { put("role", "system"); put("content", text) }
+    fun user(text: String) = buildJsonObject { put("role", "user"); put("content", text) }
+    fun assistant(text: String) = buildJsonObject { put("role", "assistant"); put("content", text) }
+    fun userWithImage(text: String, jpegBase64: String) = buildJsonObject {
+        put("role", "user")
+        put("content", buildJsonArray {
+            add(buildJsonObject { put("type", "text"); put("text", text) })
+            add(buildJsonObject {
+                put("type", "image_url")
+                put("image_url", buildJsonObject { put("url", "data:image/jpeg;base64,$jpegBase64"); put("detail", "auto") })
+            })
+        })
+    }
+    fun assistantToolCalls(content: String, calls: List<ToolCall>) = buildJsonObject {
+        put("role", "assistant")
+        if (content.isNotEmpty()) put("content", content) else put("content", JsonPrimitive(null as String?))
+        put("tool_calls", buildJsonArray {
+            calls.forEach { c ->
+                add(buildJsonObject {
+                    put("id", c.id); put("type", "function")
+                    put("function", buildJsonObject { put("name", c.name); put("arguments", c.arguments) })
+                })
+            }
+        })
+    }
+    fun tool(callId: String, content: String) = buildJsonObject {
+        put("role", "tool"); put("tool_call_id", callId); put("content", content)
+    }
+}
+
+/**
+ * Direct HTTPS client for the user's own Azure deployment. No proxy, no backend.
+ * Supports the classic Azure OpenAI deployment route, the Azure OpenAI v1 route and the
+ * Azure AI Foundry model-inference route; all three speak the chat-completions schema
+ * but differ in URL shape, versioning and how the model is selected.
+ */
+class AzureClient(private val keyProvider: () -> String?) {
+    private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
+
+    private val http = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(90, TimeUnit.SECONDS)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
+        .build()
+
+    // ---------- URL / validation ----------
+
+    fun validate(cfg: ProviderConfig): String? {
+        val raw = cfg.endpoint.trim()
+        if (raw.isEmpty()) return "Endpoint URL is required."
+        if (!raw.startsWith("https://", ignoreCase = true)) return "Endpoint must start with https://"
+        val url = raw.toHttpUrlOrNull() ?: return "Endpoint is not a valid URL."
+        if (url.host.isBlank()) return "Endpoint has no host name."
+        if (cfg.deployment.isBlank()) return "Deployment / model name is required."
+        if (!cfg.deployment.matches(Regex("[A-Za-z0-9._\\-:/]+"))) return "Deployment name contains unsupported characters."
+        if (cfg.type != ProviderType.AZURE_OPENAI_V1 && cfg.apiVersion.isBlank()) return "API version is required for this provider type."
+        return null
+    }
+
+    fun hostWarning(cfg: ProviderConfig): String? {
+        val host = cfg.endpoint.trim().toHttpUrlOrNull()?.host ?: return null
+        val known = listOf(".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com", ".models.ai.azure.com", ".inference.ai.azure.com", ".azure-api.net")
+        return if (known.none { host.endsWith(it) }) "Host $host is not a standard Azure AI domain. That is fine for custom domains or API Management, but double-check it." else null
+    }
+
+    private fun baseOf(endpoint: String): String {
+        var e = endpoint.trim().trimEnd('/')
+        // Accept a pasted full request URL: keep only scheme + host (+ any custom gateway prefix).
+        val hostEnd = e.indexOf('/', "https://".length).let { if (it < 0) e.length else it }
+        listOf("/openai", "/models").forEach { marker ->
+            val i = e.indexOf(marker, startIndex = hostEnd, ignoreCase = true)
+            if (i >= hostEnd) e = e.substring(0, i)
+        }
+        val q = e.indexOf('?'); if (q > 0) e = e.substring(0, q)
+        return e.trimEnd('/')
+    }
+
+    private fun urlFor(cfg: ProviderConfig, deployment: String): String {
+        val base = baseOf(cfg.endpoint)
+        return when (cfg.type) {
+            ProviderType.AZURE_OPENAI ->
+                "$base/openai/deployments/${java.net.URLEncoder.encode(deployment, "UTF-8")}/chat/completions?api-version=${cfg.apiVersion.trim()}"
+            ProviderType.AZURE_OPENAI_V1 -> "$base/openai/v1/chat/completions"
+            ProviderType.AZURE_AI_FOUNDRY -> "$base/models/chat/completions?api-version=${cfg.apiVersion.trim()}"
+        }
+    }
+
+    // ---------- Requests ----------
+
+    /**
+     * One chat turn. When [onDelta] is given the response is streamed (SSE) and text deltas are
+     * forwarded as they arrive; tool-call fragments are accumulated and returned complete.
+     */
+    suspend fun chat(
+        cfg: ProviderConfig,
+        messages: List<JsonObject>,
+        tools: JsonArray? = null,
+        deployment: String = cfg.deployment,
+        onDelta: ((String) -> Unit)? = null,
+        maxTokens: Int? = null,
+    ): AiTurn = withContext(Dispatchers.IO) {
+        validate(cfg)?.let { throw AiException(AiErrorKind.INVALID_ENDPOINT, it) }
+        val key = keyProvider() ?: throw AiException(AiErrorKind.NOT_CONFIGURED, "No API key saved. Add it in Settings → AI Provider.")
+
+        var stream = onDelta != null
+        var attempt = 0
+        var emitted = false
+        val delta: ((String) -> Unit)? = onDelta?.let { cb -> { d: String -> emitted = true; cb(d) } }
+        while (true) {
+            attempt++
+            val body = buildJsonObject {
+                if (cfg.type != ProviderType.AZURE_OPENAI) put("model", deployment)
+                put("messages", JsonArray(messages))
+                if (tools != null && tools.isNotEmpty()) { put("tools", tools); put("tool_choice", "auto") }
+                if (maxTokens != null) put("max_tokens", maxTokens)
+                if (stream) put("stream", true)
+            }
+            val req = Request.Builder()
+                .url(urlFor(cfg, deployment))
+                .header("api-key", key)
+                .header("Content-Type", "application/json")
+                .header("Accept", if (stream) "text/event-stream" else "application/json")
+                .post(body.toString().toRequestBody(JSON_MT))
+                .build()
+            try {
+                val resp = http.newCall(req).await()
+                resp.use { r ->
+                    if (!r.isSuccessful) throw mapHttpError(r.code, r.body?.string().orEmpty(), r.header("Retry-After"))
+                    return@withContext if (stream) readStream(r, delta!!) else readFull(r.body?.string().orEmpty())
+                }
+            } catch (e: AiException) {
+                val retryable = (e.kind == AiErrorKind.RATE_LIMIT && e.retryAfterSec in 0..12) || e.kind == AiErrorKind.SERVER
+                if (stream && e.kind == AiErrorKind.BAD_REQUEST && e.message.orEmpty().contains("stream", true)) {
+                    stream = false; continue // deployment rejects streaming: fall back to a single response
+                }
+                if (retryable && attempt < 3 && !emitted) { delay(((e.retryAfterSec.takeIf { it > 0 } ?: 2) * 1000L)); continue }
+                throw e
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: IOException) {
+                val mapped = mapIo(e)
+                // Never replay a request whose partial answer was already shown/spoken.
+                if (mapped.kind == AiErrorKind.TIMEOUT && attempt < 2 && !emitted) continue
+                throw mapped
+            }
+        }
+        @Suppress("UNREACHABLE_CODE") error("unreachable")
+    }
+
+    private suspend fun readStream(r: Response, onDelta: (String) -> Unit): AiTurn {
+        val source = r.body?.source() ?: throw AiException(AiErrorKind.SERVER, "Empty response body")
+        val content = StringBuilder()
+        val calls = sortedMapOf<Int, Triple<StringBuilder, StringBuilder, StringBuilder>>() // id, name, args
+        var finish: String? = null
+        var model: String? = null
+        val ctx = kotlin.coroutines.coroutineContext
+        while (true) {
+            ctx.ensureActive()
+            val line = source.readUtf8Line() ?: break
+            if (!line.startsWith("data:")) continue
+            val data = line.removePrefix("data:").trim()
+            if (data == "[DONE]") break
+            if (data.isEmpty()) continue
+            val obj = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
+            obj["error"]?.let { throw mapHttpError(500, data, null) }
+            obj.str("model")?.takeIf { it.isNotBlank() }?.let { model = it }
+            val choices = obj["choices"] as? JsonArray ?: continue
+            for (ch in choices) {
+                val c = ch.jsonObject
+                c.str("finish_reason")?.let { finish = it }
+                val delta = c["delta"] as? JsonObject ?: continue
+                delta.str("content")?.let { if (it.isNotEmpty()) { content.append(it); onDelta(it) } }
+                (delta["tool_calls"] as? JsonArray)?.forEach { tcEl ->
+                    val tc = tcEl.jsonObject
+                    val idx = tc["index"]?.jsonPrimitive?.intOrNull ?: calls.size
+                    val slot = calls.getOrPut(idx) { Triple(StringBuilder(), StringBuilder(), StringBuilder()) }
+                    tc.str("id")?.let { if (slot.first.isEmpty()) slot.first.append(it) }
+                    (tc["function"] as? JsonObject)?.let { f ->
+                        f.str("name")?.let { if (slot.second.isEmpty()) slot.second.append(it) }
+                        f.str("arguments")?.let { slot.third.append(it) }
+                    }
+                }
+            }
+        }
+        if (finish == "content_filter") throw AiException(AiErrorKind.CONTENT_FILTER, "Azure content filter blocked the response.")
+        val toolCalls = calls.values.mapIndexed { i, (id, name, args) ->
+            ToolCall(id.toString().ifEmpty { "call_$i" }, name.toString(), args.toString().ifBlank { "{}" })
+        }.filter { it.name.isNotBlank() }
+        return AiTurn(content.toString(), toolCalls, finish, model)
+    }
+
+    private fun readFull(text: String): AiTurn {
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrElse {
+            throw AiException(AiErrorKind.SERVER, "Unreadable response from endpoint.")
+        }
+        val choice = (obj["choices"] as? JsonArray)?.firstOrNull()?.jsonObject
+            ?: throw AiException(AiErrorKind.SERVER, "Response contained no choices.")
+        val finish = choice.str("finish_reason")
+        if (finish == "content_filter") throw AiException(AiErrorKind.CONTENT_FILTER, "Azure content filter blocked the response.")
+        val msg = choice["message"]?.jsonObject
+        val calls = (msg?.get("tool_calls") as? JsonArray)?.mapIndexedNotNull { i, el ->
+            val tc = el.jsonObject
+            val f = tc["function"]?.jsonObject ?: return@mapIndexedNotNull null
+            ToolCall(tc.str("id") ?: "call_$i", f.str("name") ?: return@mapIndexedNotNull null, f.str("arguments") ?: "{}")
+        }.orEmpty()
+        return AiTurn(msg?.str("content").orEmpty(), calls, finish, obj.str("model"))
+    }
+
+    // ---------- Connection test ----------
+
+    data class TestResult(val ok: Boolean, val summary: String, val capability: String)
+
+    suspend fun testConnection(cfg: ProviderConfig): TestResult {
+        validate(cfg)?.let { return TestResult(false, it, "") }
+        val pingTool = buildJsonArray {
+            add(buildJsonObject {
+                put("type", "function")
+                put("function", buildJsonObject {
+                    put("name", "ping"); put("description", "Connectivity check. Call it with value 'ok'.")
+                    put("parameters", buildJsonObject {
+                        put("type", "object")
+                        put("properties", buildJsonObject { put("value", buildJsonObject { put("type", "string") }) })
+                        put("required", buildJsonArray { add(JsonPrimitive("value")) })
+                    })
+                })
+            })
+        }
+        val started = System.currentTimeMillis()
+        val caps = mutableListOf<String>()
+        val model: String?
+        try {
+            val turn = try {
+                chat(cfg, listOf(Msg.user("Call the ping tool with value 'ok'.")), pingTool)
+            } catch (e: AiException) {
+                if (e.kind == AiErrorKind.BAD_REQUEST || e.kind == AiErrorKind.CAPABILITY) {
+                    val plain = chat(cfg, listOf(Msg.user("Reply with the single word OK.")))
+                    val ms = System.currentTimeMillis() - started
+                    return TestResult(
+                        true,
+                        "Connected, but this deployment rejected tool calling (${e.message}). NYRO needs tool calling to control the phone; only chat will work.",
+                        "Model: ${plain.model ?: cfg.deployment} · Tools ✗ · ${ms}ms"
+                    )
+                } else throw e
+            }
+            model = turn.model
+            val ms = System.currentTimeMillis() - started
+            caps += if (turn.toolCalls.any { it.name == "ping" }) "Tools ✓" else "Tools ? (model answered without calling)"
+            caps += "${ms}ms"
+        } catch (e: AiException) {
+            return TestResult(false, e.message ?: "Connection failed", "")
+        }
+
+        // Streaming probe
+        caps += try {
+            var got = false
+            chat(cfg, listOf(Msg.user("Say OK.")), onDelta = { got = true })
+            if (got) "Streaming ✓" else "Streaming ✓ (empty)"
+        } catch (e: AiException) { "Streaming ✗" }
+
+        // Vision probe on the vision deployment (or the main one) with a tiny generated image.
+        val visionDep = cfg.visionDeployment.ifBlank { cfg.deployment }
+        caps += try {
+            chat(cfg, listOf(Msg.userWithImage("What single color fills this image? One word.", TINY_BLUE_JPEG)), deployment = visionDep)
+            if (cfg.visionDeployment.isBlank()) "Vision ✓" else "Vision ✓ ($visionDep)"
+        } catch (e: AiException) {
+            if (e.kind == AiErrorKind.AUTH || e.kind == AiErrorKind.NETWORK) "Vision ?" else "Vision ✗"
+        }
+        return TestResult(true, "Connected to ${model ?: cfg.deployment}.", "Model: ${model ?: cfg.deployment} · " + caps.joinToString(" · "))
+    }
+
+    // ---------- Error mapping ----------
+
+    private fun mapHttpError(code: Int, body: String, retryAfter: String?): AiException {
+        val err = runCatching { json.parseToJsonElement(body).jsonObject["error"]?.jsonObject }.getOrNull()
+        val ecode = err?.str("code").orEmpty()
+        val emsg = (err?.str("message") ?: body.take(300)).replace(Regex("[A-Za-z0-9]{32,}"), "•••")
+        val ra = retryAfter?.toIntOrNull() ?: Regex("retry after (\\d+) second", RegexOption.IGNORE_CASE).find(emsg)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        return when {
+            code == 401 -> AiException(AiErrorKind.AUTH, "Invalid API key or the key does not belong to this resource (401).", code)
+            code == 403 -> AiException(AiErrorKind.AUTH, "Access denied (403): $emsg", code)
+            code == 404 && (ecode.contains("DeploymentNotFound", true) || emsg.contains("deployment", true)) ->
+                AiException(AiErrorKind.DEPLOYMENT_NOT_FOUND, "Deployment not found. Check the deployment name exactly as shown in Azure (404).", code)
+            code == 404 -> AiException(AiErrorKind.INVALID_ENDPOINT, "Endpoint path not found (404). Check endpoint URL, provider type and API version. $emsg", code)
+            code == 429 && (ecode.contains("quota", true) || emsg.contains("quota", true) || ecode == "insufficient_quota") ->
+                AiException(AiErrorKind.QUOTA, "Azure quota exhausted for this deployment: $emsg", code, ra)
+            code == 429 -> AiException(AiErrorKind.RATE_LIMIT, "Rate limited by Azure${if (ra > 0) ", retry in ${ra}s" else ""}.", code, ra)
+            code == 400 && (emsg.contains("api-version", true) || emsg.contains("api version", true)) ->
+                AiException(AiErrorKind.API_VERSION, "API version not supported by this endpoint: $emsg", code)
+            code == 400 && ecode == "content_filter" -> AiException(AiErrorKind.CONTENT_FILTER, "Azure content filter blocked the request.", code)
+            code == 400 && (emsg.contains("image", true) || emsg.contains("tools", true) || emsg.contains("function", true) || ecode.contains("unsupported", true)) ->
+                AiException(AiErrorKind.CAPABILITY, "Model capability not supported: $emsg", code)
+            code in 400..499 -> AiException(AiErrorKind.BAD_REQUEST, "Request rejected ($code): $emsg", code)
+            code >= 500 -> AiException(AiErrorKind.SERVER, "Azure service error ($code). ${emsg.take(160)}", code)
+            else -> AiException(AiErrorKind.UNKNOWN, "Unexpected response ($code): $emsg", code)
+        }
+    }
+
+    private fun mapIo(e: IOException): AiException = when (e) {
+        is UnknownHostException -> AiException(AiErrorKind.NETWORK, "Cannot resolve the endpoint host. Check the URL or your internet connection.")
+        is InterruptedIOException -> AiException(AiErrorKind.TIMEOUT, "The request to Azure timed out.")
+        is SSLException -> AiException(AiErrorKind.NETWORK, "Secure connection failed (TLS).")
+        else -> AiException(AiErrorKind.NETWORK, "Network error: ${e.javaClass.simpleName}")
+    }
+
+    private fun JsonObject.str(k: String): String? = (this[k] as? JsonPrimitive)?.contentOrNull
+
+    private suspend fun Call.await(): Response = suspendCancellableCoroutine { cont ->
+        cont.invokeOnCancellation { runCatching { cancel() } }
+        enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) { if (cont.isActive) cont.resumeWithException(e) }
+            override fun onResponse(call: Call, response: Response) {
+                if (cont.isActive) cont.resume(response) else response.close()
+            }
+        })
+    }
+
+    companion object {
+        private val JSON_MT = "application/json".toMediaType()
+
+        /** 16×16 solid blue JPEG, generated at runtime once. */
+        private val TINY_BLUE_JPEG: String by lazy {
+            val bmp = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+            bmp.eraseColor(android.graphics.Color.BLUE)
+            val out = java.io.ByteArrayOutputStream()
+            bmp.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+            bmp.recycle()
+            android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+        }
+    }
+}
+
+internal fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull

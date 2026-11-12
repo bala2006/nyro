@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="nyro_bg">#05070D</color>
+    <color name="nyro_blue">#2F7BFF</color>
+    <color name="nyro_cyan">#38E8FF</color>
+
+    <style name="Theme.Nyro" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/nyro_bg</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:colorAccent">@color/nyro_cyan</item>
+    </style>
+
+    <style name="Theme.Nyro.Transparent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>
