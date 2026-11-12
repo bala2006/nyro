@@ -133,7 +133,8 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         }
         val speed = if (u.tokensPerSec > 0f) "%.0f tok/s".format(u.tokensPerSec) else "– tok/s"
         val task = if (st.taskActive || u.task > 0) "task ${com.nyro.companion.agent.UsageMeter.fmt(u.task)} · " else ""
-        return Triple(text, "${task}total ${com.nyro.companion.agent.UsageMeter.fmt(u.total)} tok · $speed", color)
+        val cache = if (u.cachePct > 0) " · cache ${u.cachePct}%" else ""
+        return Triple(text, "${task}total ${com.nyro.companion.agent.UsageMeter.fmt(u.total)} tok · $speed$cache", color)
     }
 
     // ---------------- Foreground ----------------

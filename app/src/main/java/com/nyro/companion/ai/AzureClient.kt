@@ -52,7 +52,8 @@ data class AiTurn(
     val usage: Usage? = null,
 )
 
-data class Usage(val input: Long, val output: Long, val total: Long)
+/** [cached]: input tokens served from the prompt cache. [cacheWrite]: tokens written to it (GPT-5.6+ bills these). */
+data class Usage(val input: Long, val output: Long, val total: Long, val cached: Long = 0, val cacheWrite: Long = 0)
 
 private fun JsonObject.long(k: String): Long = (this[k] as? JsonPrimitive)?.contentOrNull?.toLongOrNull() ?: 0L
 
@@ -62,7 +63,30 @@ internal fun usageOf(u: JsonObject?): Usage? {
     val input = u.long("prompt_tokens").takeIf { it > 0 } ?: u.long("input_tokens")
     val output = u.long("completion_tokens").takeIf { it > 0 } ?: u.long("output_tokens")
     val total = u.long("total_tokens").takeIf { it > 0 } ?: (input + output)
-    return if (total <= 0) null else Usage(input, output, total)
+    val details = (u["prompt_tokens_details"] ?: u["input_tokens_details"]) as? JsonObject
+    val cached = details?.long("cached_tokens") ?: 0L
+    val write = details?.long("cache_write_tokens")?.takeIf { it > 0 } ?: u.long("cache_write_tokens")
+    return if (total <= 0) null else Usage(input, output, total, cached, write)
+}
+
+/**
+ * GPT-5.6 / GPT-6 family deployments. These get prompt_cache_key and Responses API routing.
+ * Matched on the deployment name, so name deployments after the model (e.g. "gpt-6-luna").
+ */
+internal fun isGpt6Family(deployment: String) = Regex("(?i)gpt-?(5\\.6|6)|luna|astra|\\bsol\\b|terra").containsMatchIn(deployment)
+
+/** Sol and Luna accept reasoning_effort=none. Astra does not, so it keeps its default unless set. */
+internal fun acceptsEffortNone(deployment: String) = Regex("(?i)luna|\\bsol\\b").containsMatchIn(deployment)
+
+/**
+ * Reasoning effort to send, or null to omit the field. A saved setting wins. In Auto, Luna and Sol
+ * use "none" (fastest; the only setting where function tools work on Chat Completions). Other
+ * deployments omit the field, so non-reasoning models are never sent an unknown parameter.
+ */
+internal fun effortFor(cfg: ProviderConfig, deployment: String, forceNone: Boolean = false): String? {
+    if (forceNone) return "none"
+    cfg.reasoningEffort.takeIf { it.isNotBlank() }?.let { return it }
+    return if (acceptsEffortNone(deployment)) "none" else null
 }
 
 enum class WireKind { CHAT, RESPONSES }
@@ -175,7 +199,10 @@ class AzureClient(
     private fun responsesUrlFor(cfg: ProviderConfig): String = "${baseOf(cfg.endpoint)}/openai/v1/responses"
 
     private fun wantsResponses(cfg: ProviderConfig, deployment: String) =
-        cfg.wireApi != WireApi.CHAT && (cfg.useResponses(deployment) || deployment in forcedResponses)
+        cfg.wireApi != WireApi.CHAT && (
+            cfg.useResponses(deployment) || deployment in forcedResponses ||
+                (cfg.wireApi == WireApi.AUTO && isGpt6Family(deployment))
+        )
 
     /** The service's own hint that tool calling with this (reasoning) model must use /responses. */
     private fun needsResponses(e: AiException): Boolean {
@@ -198,31 +225,33 @@ class AzureClient(
         deployment: String = cfg.deployment,
         onDelta: ((String) -> Unit)? = null,
         maxTokens: Int? = null,
+        /** Stable per conversation, so requests sharing a prefix hit the same cache (GPT-5.6+ only). */
+        cacheKey: String? = null,
     ): AiTurn {
         validate(cfg)?.let { throw AiException(AiErrorKind.INVALID_ENDPOINT, it) }
         val key = keyProvider() ?: throw AiException(AiErrorKind.NOT_CONFIGURED, "No API key saved. Add it in Settings → AI Provider.")
 
         if (wantsResponses(cfg, deployment)) {
             return try {
-                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens) }
+                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens, cacheKey) }
             } catch (e: AiException) {
                 // Endpoint has no Responses route (e.g. a gateway): fall back to chat with reasoning disabled.
                 if (cfg.wireApi == WireApi.AUTO && e.httpCode == 404) {
-                    send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, reasoningNone = tools != null) }
+                    send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, effortFor(cfg, deployment, forceNone = tools != null), cacheKey) }
                 } else throw e
             }
         }
         return try {
-            send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, reasoningNone = false) }
+            send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, effortFor(cfg, deployment), cacheKey) }
         } catch (e: AiException) {
             if (!needsResponses(e)) throw e
             if (cfg.wireApi == WireApi.CHAT) {
                 // User pinned Chat Completions: the service allows tools only with reasoning disabled.
-                send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, reasoningNone = true) }
+                send(cfg, key, deployment, onDelta, WireKind.CHAT) { stream -> chatBody(cfg, deployment, messages, tools, stream, maxTokens, effortFor(cfg, deployment, forceNone = true), cacheKey) }
             } else {
                 forcedResponses += deployment
                 runCatching { onResponsesRequired(deployment) }
-                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens) }
+                send(cfg, key, deployment, onDelta, WireKind.RESPONSES) { stream -> responsesBody(cfg, deployment, messages, tools, stream, maxTokens, cacheKey) }
             }
         }
     }
@@ -230,20 +259,18 @@ class AzureClient(
     private fun stripPrivate(m: JsonObject): JsonObject =
         if (RAW_ITEMS_KEY in m) JsonObject(m - RAW_ITEMS_KEY) else m
 
-    private fun chatBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?, reasoningNone: Boolean) = buildJsonObject {
+    private fun chatBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?, effort: String?, cacheKey: String?) = buildJsonObject {
         if (cfg.type != ProviderType.AZURE_OPENAI) put("model", deployment)
         put("messages", JsonArray(messages.map(::stripPrivate)))
         if (tools != null && tools.isNotEmpty()) { put("tools", tools); put("tool_choice", "auto") }
-        when {
-            reasoningNone -> put("reasoning_effort", "none")
-            cfg.reasoningEffort.isNotBlank() -> put("reasoning_effort", cfg.reasoningEffort)
-        }
+        effort?.let { put("reasoning_effort", it) }
+        if (cacheKey != null && isGpt6Family(deployment)) put("prompt_cache_key", cacheKey)
         if (maxTokens != null) put("max_tokens", maxTokens)
         if (stream) { put("stream", true); put("stream_options", buildJsonObject { put("include_usage", true) }) }
     }
 
     /** Translates Chat-shaped history into Responses input items (stateless: store=false). */
-    private fun responsesBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?) = buildJsonObject {
+    private fun responsesBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?, cacheKey: String?) = buildJsonObject {
         put("model", deployment)
         val instructions = messages.filter { it.str("role") == "system" }.mapNotNull { it.str("content") }.joinToString("\n\n")
         if (instructions.isNotBlank()) put("instructions", instructions)
@@ -305,9 +332,10 @@ class AzureClient(
             })
             put("tool_choice", "auto")
         }
-        if (cfg.reasoningEffort.isNotBlank()) put("reasoning", buildJsonObject { put("effort", cfg.reasoningEffort) })
+        effortFor(cfg, deployment)?.let { e -> put("reasoning", buildJsonObject { put("effort", e) }) }
         // Keep conversation state on the phone: nothing stored server-side, reasoning replayed encrypted.
         put("store", false)
+        if (cacheKey != null && isGpt6Family(deployment)) put("prompt_cache_key", cacheKey)
         put("include", buildJsonArray { add(JsonPrimitive("reasoning.encrypted_content")) })
         if (maxTokens != null) put("max_output_tokens", maxTokens)
         if (stream) put("stream", true)
