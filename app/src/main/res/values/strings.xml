@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NYRO</string>
+    <string name="tagline">Your phone. Your intelligence.</string>
+    <string name="accessibility_label">NYRO Phone Control</string>
+    <string name="accessibility_description">Lets NYRO read what is on screen and perform taps, swipes, scrolling and typing that you ask for. NYRO only acts while NYRO Mode is on and a task is running. Screen content is sent to your configured Azure AI endpoint only when a task needs it.</string>
+    <string name="notification_listener_label">NYRO Notification Reader</string>
+    <string name="channel_mode">NYRO Mode</string>
+</resources>
