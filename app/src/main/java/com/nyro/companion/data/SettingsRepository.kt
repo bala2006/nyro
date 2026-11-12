@@ -77,6 +77,11 @@ data class NyroSettings(
     val priceInput: Float = 0.10f,
     val priceCached: Float = 0.01f,
     val priceOutput: Float = 0.50f,
+    /** Orb look: size multiplier (0.7–1.4), opacity (0.35–1.0), compact dot, and docking to screen edges. */
+    val orbScale: Float = 1.0f,
+    val orbOpacity: Float = 1.0f,
+    val orbCompact: Boolean = false,
+    val dockEdges: Boolean = true,
     val orbX: Int = -1,
     val orbY: Int = 400,
     val lastConnectionStatus: String = "",
@@ -108,6 +113,10 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val priceIn = floatPreferencesKey("price_input")
         val priceCached = floatPreferencesKey("price_cached")
         val priceOut = floatPreferencesKey("price_output")
+        val orbScale = floatPreferencesKey("orb_scale")
+        val orbOpacity = floatPreferencesKey("orb_opacity")
+        val orbCompact = booleanPreferencesKey("orb_compact")
+        val dockEdges = booleanPreferencesKey("dock_edges")
         val orbX = intPreferencesKey("orb_x")
         val orbY = intPreferencesKey("orb_y")
         val lastStatus = stringPreferencesKey("last_status")
@@ -145,6 +154,10 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         priceInput = this[K.priceIn] ?: 0.10f,
         priceCached = this[K.priceCached] ?: 0.01f,
         priceOutput = this[K.priceOut] ?: 0.50f,
+        orbScale = this[K.orbScale] ?: 1.0f,
+        orbOpacity = this[K.orbOpacity] ?: 1.0f,
+        orbCompact = this[K.orbCompact] ?: false,
+        dockEdges = this[K.dockEdges] ?: true,
         orbX = this[K.orbX] ?: -1,
         orbY = this[K.orbY] ?: 400,
         lastConnectionStatus = this[K.lastStatus] ?: "",
@@ -170,6 +183,10 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
 
     suspend fun setNyroMode(on: Boolean) = store.edit { it[K.nyroMode] = on }
     suspend fun setDarkTheme(on: Boolean) = store.edit { it[K.darkTheme] = on }
+    suspend fun saveOrbLook(scale: Float, opacity: Float, compact: Boolean, dock: Boolean) = store.edit {
+        it[K.orbScale] = scale; it[K.orbOpacity] = opacity; it[K.orbCompact] = compact; it[K.dockEdges] = dock
+    }
+
     suspend fun savePrices(input: Float, cached: Float, output: Float) = store.edit {
         it[K.priceIn] = input; it[K.priceCached] = cached; it[K.priceOut] = output
     }

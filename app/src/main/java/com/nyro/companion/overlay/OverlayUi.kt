@@ -88,14 +88,21 @@ fun OrbOverlay(
     val st by g.agent.state.collectAsStateWithLifecycle()
     val speaking by g.voice.speaking.collectAsStateWithLifecycle()
     val mic by g.voice.micLevel.collectAsStateWithLifecycle()
-    val orb = orbStateOf(st, speaking)
+    val mood by g.agent.mood.collectAsStateWithLifecycle()
+    val settings by g.settings.settings.collectAsStateWithLifecycle()
+    val base = orbStateOf(st, speaking)
+    // After a task the orb shows its mood briefly; otherwise it shows the live state.
+    val orb = if (base == com.nyro.companion.ui.components.OrbState.IDLE && mood != null) {
+        if (mood == "happy") com.nyro.companion.ui.components.OrbState.HAPPY else com.nyro.companion.ui.components.OrbState.CONFUSED
+    } else base
     val busy = st.taskActive || speaking || st.phase == com.nyro.companion.agent.Phase.LISTENING
+    val size = if (settings.orbCompact) 28.dp else 72.dp * settings.orbScale
 
-    Box(Modifier.size(84.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(size + 12.dp), contentAlignment = Alignment.Center) {
         NyroOrb(
             orb, mic,
             Modifier
-                .size(72.dp)
+                .size(size)
                 .pointerInteropFilter { ev ->
                     when (ev.actionMasked) {
                         android.view.MotionEvent.ACTION_DOWN -> {

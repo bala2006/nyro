@@ -75,6 +75,22 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         }
 
         Gap(12)
+        SectionLabel("Orb")
+        GlassCard(Modifier.fillMaxWidth(), padding = 14) {
+            Column {
+                Toggle("Compact orb", "A small dot instead of the full orb.", s.orbCompact) { v ->
+                    scope.launch { g.settings.saveOrbLook(s.orbScale, s.orbOpacity, v, s.dockEdges) }
+                }
+                Text("Size ${"%.1f".format(s.orbScale)}×", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                Slider(s.orbScale, { v -> scope.launch { g.settings.saveOrbLook((v * 10).toInt() / 10f, s.orbOpacity, s.orbCompact, s.dockEdges) } }, valueRange = 0.7f..1.4f, colors = sliderColors())
+                Text("Opacity ${(s.orbOpacity * 100).toInt()}%", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                Slider(s.orbOpacity, { v -> scope.launch { g.settings.saveOrbLook(s.orbScale, (v * 20).toInt() / 20f, s.orbCompact, s.dockEdges) } }, valueRange = 0.35f..1f, colors = sliderColors())
+                Toggle("Dock to screen edges", "Snap the orb to the nearest left or right edge when you let go.", s.dockEdges) { v ->
+                    scope.launch { g.settings.saveOrbLook(s.orbScale, s.orbOpacity, s.orbCompact, v) }
+                }
+            }
+        }
+        Gap(12)
         SectionLabel("Voice")
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
             Column {

@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import com.nyro.companion.NyroApp
+import com.nyro.companion.overlay.NyroModeService
 import com.nyro.companion.overlay.UiFeedback
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,6 +36,9 @@ class NyroAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         lastEventAt = SystemClock.uptimeMillis()
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            NyroModeService.instance?.onKeyboardState(ScreenReader.keyboardOpen(this))
+        }
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString().orEmpty()
             if (pkg.isNotEmpty() && pkg != packageName) foregroundPackage = pkg
