@@ -166,7 +166,8 @@ class AzureClient(
     /** The service's own hint that tool calling with this (reasoning) model must use /responses. */
     private fun needsResponses(e: AiException): Boolean {
         val m = e.message.orEmpty()
-        return e.httpCode == 400 && (m.contains("/responses", true) || (m.contains("reasoning_effort", true) && m.contains("not supported", true)))
+        // Match on the message only: some gateways wrap the 400 or deliver it inside the stream.
+        return m.contains("/responses", true) || (m.contains("reasoning_effort", true) && m.contains("not supported", true))
     }
 
     // ---------- Requests ----------

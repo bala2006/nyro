@@ -284,6 +284,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
                             startActivity(Intent(this@NyroModeService, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         },
                         onNormalMode = { lifecycleScope.launch { NyroApp.graph.mode.disable() } },
+                        onTyping = { typing -> setPanelTyping(typing) },
                     )
                 }
             }
@@ -292,10 +293,38 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
                 if (ev.action == MotionEvent.ACTION_OUTSIDE) { if (!isOnOrb(ev.rawX, ev.rawY)) maybeAutoCollapse(); true } else false
             }
         }.also { panelView = it }
-        runCatching { wm.addView(view, panelParams()) }.onSuccess { panelOpen.value = true }
+        val lp = panelParams().also { panelLp = it }
+        runCatching { wm.addView(view, lp) }.onSuccess { panelOpen.value = true }
     }
 
+    private var panelLp: WindowManager.LayoutParams? = null
+
+    /**
+     * While typing, move the panel to the top of the screen so the keyboard can't cover it
+     * (overlay windows aren't resized for the IME), and keep the keyboard visible.
+     */
+    private fun setPanelTyping(typing: Boolean) {
+        val v = panelView ?: return
+        val lp = panelLp ?: return
+        if (!panelOpen.value) return
+        panelTyping = typing
+        lp.gravity = if (typing) Gravity.TOP else Gravity.BOTTOM
+        lp.y = if (typing) statusBarHeight() else 0
+        lp.softInputMode = (if (typing) WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE else WindowManager.LayoutParams.SOFT_INPUT_STATE_HIDDEN) or
+            WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+        runCatching { wm.updateViewLayout(v, lp) }
+    }
+
+    private fun statusBarHeight(): Int {
+        val id = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (id > 0) resources.getDimensionPixelSize(id) else (24 * resources.displayMetrics.density).toInt()
+    }
+
+    @Volatile private var panelTyping = false
+
     private fun maybeAutoCollapse() {
+        // Keyboard taps are "outside" touches for the panel window: never collapse while typing.
+        if (panelTyping) return
         // Keep the panel up while the user must answer a confirmation.
         if (NyroApp.graph.agent.state.value.confirmation == null) hidePanel()
     }
@@ -303,8 +332,13 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     private fun hidePanel() {
         val v = panelView ?: return
         if (!panelOpen.value) return
+        runCatching {
+            v.findFocus()?.let { f -> getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.hideSoftInputFromWindow(f.windowToken, 0); f.clearFocus() }
+        }
         runCatching { wm.removeView(v) }
         panelOpen.value = false
+        panelTyping = false
+        panelLp?.let { it.gravity = Gravity.BOTTOM; it.y = 0 }
     }
 
     // ---------------- OverlayHost ----------------
