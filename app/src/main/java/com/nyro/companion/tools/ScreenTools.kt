@@ -339,11 +339,15 @@ fun screenTools(): List<Tool> = listOf(
             val g = NyroApp.graph
             if (!g.settings.current.allowScreenshots) return ToolResult.fail("Screenshots are disabled in NYRO settings. Use read_screen instead.")
             UiFeedback.scan()
-            val bmp = captureScreen() ?: return ToolResult.fail(lastCaptureError)
+            val raw = captureScreen() ?: return ToolResult.fail(lastCaptureError)
+            // Numbered boxes on the elements, using the same ids as read_screen. The model picks a number
+            // instead of estimating pixel coordinates from the picture.
+            val snap = NyroAccessibilityService.current?.let { ScreenSession.read(it) }
+            val bmp = if (snap != null) annotate(raw, snap) else raw
             val (jpeg, scale, w, h) = encode(bmp)
             ScreenSession.shotScale = scale
             UiFeedback.notice("Screen shared with Azure")
-            val note = "Screenshot ${w}x$h (scale $scale of screen pixels). Use tap_point with space='screenshot' for image coordinates."
+            val note = "Screenshot ${w}x$h. Numbered boxes mark tappable elements: act on one with tap_element using its number (the same numbers as read_screen)."
             val cfg = g.settings.current.provider
             if (cfg.visionDeployment.isNotBlank() && cfg.visionDeployment != cfg.deployment) {
                 return try {
@@ -388,7 +392,31 @@ suspend fun captureScreen(): Bitmap? {
 
 data class Encoded(val base64: String, val scale: Float, val w: Int, val h: Int)
 
-fun encode(src: Bitmap, maxDim: Int = 1280, quality: Int = 72): Encoded {
+/** Draws numbered boxes on the tappable elements of [snap] (screen pixels, same as the bitmap). */
+fun annotate(src: Bitmap, snap: com.nyro.companion.access.ScreenSnapshot): Bitmap {
+    val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
+    val canvas = android.graphics.Canvas(out)
+    val accent = android.graphics.Color.rgb(74, 143, 224)
+    val stroke = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE; strokeWidth = maxOf(2f, out.width / 400f); color = accent
+    }
+    val fill = android.graphics.Paint().apply { color = accent }
+    val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.WHITE; textSize = out.width / 34f; typeface = android.graphics.Typeface.DEFAULT_BOLD
+    }
+    snap.elements.filter { it.clickable || it.editable || it.scrollable }.take(120).forEach { e ->
+        val r = android.graphics.RectF(e.bounds)
+        canvas.drawRect(r, stroke)
+        val label = e.id.toString()
+        val w = text.measureText(label) + 8f
+        val h = text.textSize + 6f
+        canvas.drawRect(r.left, r.top, r.left + w, r.top + h, fill)
+        canvas.drawText(label, r.left + 4f, r.top + h - 6f, text)
+    }
+    return out
+}
+
+fun encode(src: Bitmap, maxDim: Int = 800, quality: Int = 60): Encoded {
     val scale = minOf(1f, maxDim.toFloat() / maxOf(src.width, src.height))
     val bmp = if (scale < 1f) Bitmap.createScaledBitmap(src, (src.width * scale).roundToInt(), (src.height * scale).roundToInt(), true) else src
     val out = ByteArrayOutputStream()

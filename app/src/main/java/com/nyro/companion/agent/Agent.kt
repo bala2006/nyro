@@ -248,6 +248,10 @@ class Agent(private val g: AppGraph) {
                 val modelMs = System.currentTimeMillis() - modelStart
                 tts.flush()
                 g.usage.turnFinished(turn.usage)
+                // Screenshots are used by the call that follows them; drop the image so later calls don't pay for it again.
+                for (i in messages.indices) if (messages[i]["content"] is JsonArray) {
+                    messages[i] = Msg.user("[Screenshot shared earlier. Its numbered elements are described in the step results.]")
+                }
                 turn.usage?.let { u ->
                     log.append("  model %.1fs · input %d (cached %d, written %d) · output %d\n".format(modelMs / 1000.0, u.input, u.cached, u.cacheWrite, u.output))
                 }

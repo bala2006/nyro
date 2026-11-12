@@ -287,8 +287,10 @@ class EffectsView(context: Context) : View(context) {
     private fun drawPill(canvas: Canvas) {
         if (pillAlpha <= 0.01f) return
         val txt = status ?: return
-        val label = "NYRO · $txt"
-        val sub = metrics
+        // Keep the pill inside the screen: truncate text instead of letting it run off an edge.
+        val maxTextW = width - 2 * 24f * density - 2 * 14f * density - 12f * density
+        val label = fit("NYRO · $txt", pillText, maxTextW)
+        val sub = metrics?.let { fit(it, pillSub, maxTextW) }
         val tw = maxOf(pillText.measureText(label), sub?.let { pillSub.measureText(it) } ?: 0f)
         val h = (if (sub != null) 46f else 32f) * density
         val padX = 14f * density
@@ -305,6 +307,13 @@ class EffectsView(context: Context) : View(context) {
         canvas.drawText(label, textX, line1Y, pillText)
         if (sub != null) canvas.drawText(sub, textX, rr.top + 37f * density, pillSub)
         canvas.restore()
+    }
+
+    private fun fit(s: String, p: Paint, max: Float): String {
+        if (p.measureText(s) <= max) return s
+        var t = s
+        while (t.length > 1 && p.measureText(t + "…") > max) t = t.dropLast(1)
+        return t + "…"
     }
 
     companion object {
