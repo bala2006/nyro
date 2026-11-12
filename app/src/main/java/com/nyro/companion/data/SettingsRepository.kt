@@ -79,6 +79,8 @@ data class NyroSettings(
     val recognitionLanguage: String = "",
     val confirmMediumRisk: Boolean = true,
     val allowScreenshots: Boolean = true,
+    /** Dark is the default; false selects the light palette. */
+    val darkTheme: Boolean = true,
     val orbX: Int = -1,
     val orbY: Int = 400,
     val lastConnectionStatus: String = "",
@@ -107,6 +109,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val recLang = stringPreferencesKey("rec_lang")
         val confirmMedium = booleanPreferencesKey("confirm_medium")
         val allowShots = booleanPreferencesKey("allow_screenshots")
+        val darkTheme = booleanPreferencesKey("dark_theme")
         val orbX = intPreferencesKey("orb_x")
         val orbY = intPreferencesKey("orb_y")
         val lastStatus = stringPreferencesKey("last_status")
@@ -141,6 +144,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         recognitionLanguage = this[K.recLang] ?: "",
         confirmMediumRisk = this[K.confirmMedium] ?: true,
         allowScreenshots = this[K.allowShots] ?: true,
+        darkTheme = this[K.darkTheme] ?: true,
         orbX = this[K.orbX] ?: -1,
         orbY = this[K.orbY] ?: 400,
         lastConnectionStatus = this[K.lastStatus] ?: "",
@@ -174,6 +178,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     }
 
     suspend fun setNyroMode(on: Boolean) = store.edit { it[K.nyroMode] = on }
+    suspend fun setDarkTheme(on: Boolean) = store.edit { it[K.darkTheme] = on }
     suspend fun setConnectionStatus(status: String, capability: String) = store.edit {
         it[K.lastStatus] = status; it[K.capability] = capability
     }

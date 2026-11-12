@@ -66,6 +66,14 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         NavRow("Permissions", "Overlay, phone control, microphone, notifications") { go(Routes.PERMISSIONS) }
 
         Gap(12)
+        SectionLabel("Appearance")
+        GlassCard(Modifier.fillMaxWidth(), padding = 14) {
+            Toggle("Dark theme", "Dark is the default. Turn off to use the light palette. Overlay colors update the next time NYRO Mode starts.", s.darkTheme) { v ->
+                scope.launch { g.settings.setDarkTheme(v) }
+            }
+        }
+
+        Gap(12)
         SectionLabel("Voice")
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
             Column {
@@ -147,7 +155,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
 
 @Composable
 private fun NavRow(title: String, sub: String, onClick: () -> Unit) {
-    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(22.dp)).clickable(onClick = onClick), padding = 14) {
+    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), padding = 14) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(title, color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall)

@@ -165,9 +165,9 @@ fun ConfirmOverlay() {
         Modifier
             .widthIn(max = 340.dp)
             .padding(horizontal = 10.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(Color(0xE60B1630))
-            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(18.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(Nyro.Glass.copy(alpha = 0.94f))
+            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
             .padding(12.dp),
     ) {
         Text(

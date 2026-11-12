@@ -34,6 +34,7 @@ import com.nyro.companion.ui.screens.SettingsScreen
 import com.nyro.companion.ui.screens.TasksScreen
 import com.nyro.companion.ui.theme.Nyro
 import com.nyro.companion.ui.theme.NyroTheme
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -41,7 +42,8 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         NyroApp.graph.mode.restoreIfNeeded()
         setContent {
-            NyroTheme {
+            val s by NyroApp.graph.settings.settings.collectAsStateWithLifecycle()
+            NyroTheme(dark = s.darkTheme) {
                 Box(Modifier.fillMaxSize().background(Nyro.background)) { NyroNav() }
             }
         }

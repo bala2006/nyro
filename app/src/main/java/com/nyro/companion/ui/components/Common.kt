@@ -49,7 +49,7 @@ fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit
         value = value, onValueChange = onValueChange, modifier = modifier,
         placeholder = { Text(placeholder, color = Nyro.TextLow) },
         maxLines = 4,
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(12.dp),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
         keyboardActions = KeyboardActions(onSend = { onSend() }),
         trailingIcon = {
@@ -57,7 +57,7 @@ fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit
         },
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = Nyro.Cyan.copy(alpha = 0.7f), unfocusedBorderColor = Nyro.GlassEdge,
-            focusedContainerColor = Color(0x22000000), unfocusedContainerColor = Color(0x22000000), cursorColor = Nyro.Cyan,
+            focusedContainerColor = Nyro.Glass, unfocusedContainerColor = Nyro.Glass, cursorColor = Nyro.Cyan,
         ),
     )
 }
@@ -68,8 +68,8 @@ fun riskColor(r: Risk) = when (r) { Risk.LOW -> Nyro.Cyan; Risk.MEDIUM -> Nyro.A
 fun ConfirmationCard(risk: Risk, text: String, onAllow: () -> Unit, onDeny: () -> Unit) {
     val c = riskColor(risk)
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(c.copy(alpha = 0.12f))
-            .border(1.dp, c.copy(alpha = 0.6f), RoundedCornerShape(18.dp)).padding(14.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(c.copy(alpha = 0.12f))
+            .border(1.dp, c.copy(alpha = 0.6f), RoundedCornerShape(12.dp)).padding(14.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Shield, null, tint = c, modifier = Modifier.size(18.dp))

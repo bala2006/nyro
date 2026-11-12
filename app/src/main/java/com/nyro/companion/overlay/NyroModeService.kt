@@ -31,12 +31,14 @@ import com.nyro.companion.NyroApp
 import com.nyro.companion.R
 import com.nyro.companion.access.ScreenCaptureManager
 import com.nyro.companion.ui.MainActivity
+import com.nyro.companion.ui.theme.Nyro
 import com.nyro.companion.ui.theme.NyroTheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
+import androidx.compose.ui.graphics.toArgb
 
 /**
  * NYRO Mode. A foreground service that owns the floating companion and its windows:
@@ -126,15 +128,15 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         st: com.nyro.companion.agent.AssistantState, speaking: Boolean, tool: String?, notice: String?,
         u: com.nyro.companion.agent.UsageState,
     ): Triple<String, String, Int> {
-        val cyan = android.graphics.Color.rgb(56, 232, 255)
+        val cyan = Nyro.Cyan.toArgb()
         val (text, color) = when {
             notice != null -> notice to cyan
-            st.confirmation != null -> "Needs your OK: ${st.confirmation.text}" to android.graphics.Color.rgb(255, 181, 71)
-            st.phase == com.nyro.companion.agent.Phase.ERROR -> "Problem: ${st.error ?: "request failed"}" to android.graphics.Color.rgb(255, 77, 109)
-            st.phase == com.nyro.companion.agent.Phase.LISTENING -> (st.partialTranscript.ifBlank { "Listening…" }) to android.graphics.Color.rgb(92, 242, 255)
-            st.phase == com.nyro.companion.agent.Phase.EXECUTING && tool != null -> tool to android.graphics.Color.rgb(47, 123, 255)
-            st.phase == com.nyro.companion.agent.Phase.THINKING -> (if (u.streaming && st.reply.isNotBlank()) "Responding…" else "Thinking…") to android.graphics.Color.rgb(122, 92, 255)
-            speaking -> "Speaking" to android.graphics.Color.rgb(60, 240, 208)
+            st.confirmation != null -> "Needs your OK: ${st.confirmation.text}" to Nyro.Amber.toArgb()
+            st.phase == com.nyro.companion.agent.Phase.ERROR -> "Problem: ${st.error ?: "request failed"}" to Nyro.Danger.toArgb()
+            st.phase == com.nyro.companion.agent.Phase.LISTENING -> (st.partialTranscript.ifBlank { "Listening…" }) to Nyro.Cyan.toArgb()
+            st.phase == com.nyro.companion.agent.Phase.EXECUTING && tool != null -> tool to Nyro.Blue.toArgb()
+            st.phase == com.nyro.companion.agent.Phase.THINKING -> (if (u.streaming && st.reply.isNotBlank()) "Responding…" else "Thinking…") to Nyro.Violet.toArgb()
+            speaking -> "Speaking" to Nyro.Teal.toArgb()
             else -> "Ready" to cyan
         }
         val speed = if (u.tokensPerSec > 0f) "%.0f tok/s".format(u.tokensPerSec) else "– tok/s"

@@ -16,6 +16,12 @@ import android.view.View
 import android.view.animation.LinearInterpolator
 import kotlin.math.abs
 import kotlin.math.sin
+import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.ColorUtils
+import androidx.compose.ui.graphics.toArgb
+import com.nyro.companion.NyroApp
+import com.nyro.companion.R
+import com.nyro.companion.ui.theme.Nyro
 
 /**
  * Full-screen, non-touchable layer that shows what NYRO is doing on screen:
@@ -29,9 +35,11 @@ import kotlin.math.sin
  */
 class EffectsView(context: Context) : View(context) {
     private val density = resources.displayMetrics.density
-    private val cyan = Color.rgb(56, 232, 255)
-    private val blue = Color.rgb(47, 123, 255)
-    private val violet = Color.rgb(122, 92, 255)
+    // Palette follows the user's dark/light setting; Nyro.use must run before the colors are read.
+    private val isDark = NyroApp.graph.settings.current.darkTheme.also { Nyro.use(it) }
+    private val cyan = Nyro.Cyan.toArgb()
+    private val blue = Nyro.Blue.toArgb()
+    private val violet = Nyro.Steel.toArgb()
 
     // ---- one-shot effects ----
     private enum class Kind { RIPPLE, LONG_RIPPLE, SWIPE, FLASH }
@@ -64,7 +72,7 @@ class EffectsView(context: Context) : View(context) {
     private val scanPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val scanBand = 140 * density
     private val scanShader by lazy {
-        LinearGradient(0f, 0f, 0f, scanBand, intArrayOf(Color.TRANSPARENT, Color.argb(95, 56, 232, 255), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
+        LinearGradient(0f, 0f, 0f, scanBand, intArrayOf(Color.TRANSPARENT, ColorUtils.setAlphaComponent(cyan, 95), Color.TRANSPARENT), null, Shader.TileMode.CLAMP)
     }
 
     // ---- executing border ----
@@ -80,16 +88,16 @@ class EffectsView(context: Context) : View(context) {
     private var metrics: String? = null
     private var pillAlpha = 0f
     private var pillTarget = 0f
-    private val pillBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(230, 8, 16, 38) }
-    private val pillEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.2f * density; color = Color.argb(150, 56, 232, 255) }
-    private val pillText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(234, 242, 255); textSize = 13f * density; typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) }
-    private val pillSub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(140, 214, 235); textSize = 11f * density; typeface = android.graphics.Typeface.MONOSPACE }
+    private val pillBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = ColorUtils.setAlphaComponent(Nyro.Glass.toArgb(), 236) }
+    private val pillEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.2f * density; color = ColorUtils.setAlphaComponent(cyan, 150) }
+    private val pillText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Nyro.TextHi.toArgb(); textSize = 13f * density; typeface = ResourcesCompat.getFont(context, R.font.inter_medium) }
+    private val pillSub = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Nyro.Teal.toArgb(); textSize = 11f * density; typeface = ResourcesCompat.getFont(context, R.font.jetbrains_mono_regular) }
     private val pillDot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = cyan }
     private val hideHandler = Handler(Looper.getMainLooper())
     private val hideLater = Runnable { pillTarget = 0f; ensureRunning() }
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
-        gradient = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), intArrayOf(blue, cyan, Color.argb(30, 56, 232, 255), blue), null, Shader.TileMode.MIRROR)
+        gradient = LinearGradient(0f, 0f, w.toFloat(), h.toFloat(), intArrayOf(blue, cyan, ColorUtils.setAlphaComponent(cyan, 30), blue), null, Shader.TileMode.MIRROR)
         border.shader = gradient; borderGlow.shader = gradient
     }
 

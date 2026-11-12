@@ -174,7 +174,7 @@ fun DashboardScreen(go: (String) -> Unit) {
 
 @Composable
 private fun SetupStep(n: Int, title: String, sub: String, done: Boolean, onClick: () -> Unit) {
-    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(22.dp)).clickable(onClick = onClick), padding = 14,
+    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), padding = 14,
         accent = if (done) Nyro.Ok.copy(alpha = 0.35f) else Nyro.Cyan.copy(alpha = 0.35f)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(30.dp).clip(CircleShape).background(if (done) Nyro.Ok.copy(alpha = 0.2f) else Nyro.Cyan.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
@@ -206,7 +206,7 @@ private fun StatusChip(label: String, value: String, ok: Boolean, modifier: Modi
 
 @Composable
 private fun Tile(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
-    GlassCard(modifier.clip(RoundedCornerShape(22.dp)).clickable(onClick = onClick), padding = 16) {
+    GlassCard(modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), padding = 16) {
         Column {
             Icon(icon, null, tint = Nyro.Cyan, modifier = Modifier.size(22.dp))
             Spacer(Modifier.height(10.dp))
