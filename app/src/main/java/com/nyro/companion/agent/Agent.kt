@@ -201,6 +201,9 @@ class Agent(private val g: AppGraph) {
 
         val messages = ArrayList<JsonObject>()
         messages += Msg.system(systemPrompt())
+        conversationSummary(cid)?.takeIf { it.isNotBlank() }?.let { summary ->
+            messages += Msg.user("Summary of earlier in this conversation (for context; the newest messages follow):\n$summary")
+        }
         priorMessages(cid, 17).dropLast(1).forEach { m ->
             messages += if (m.role == "user") Msg.user(m.content) else Msg.assistant(m.content)
         }
@@ -430,6 +433,36 @@ class Agent(private val g: AppGraph) {
             "%,d tokens before caching".format(estimateTokens(messages))
         _lastSent.value = "Last request to Azure: " + line.substringAfter("· ")
         _sentLog.update { (listOf(line) + it).take(10) }
+    }
+
+    /**
+     * Continuity for long conversations: messages older than the live window are summarized once
+     * into the conversation row, so later requests keep the goals and outcomes without resending
+     * every old message. Private sessions have no stored conversation and skip this.
+     */
+    private suspend fun conversationSummary(cid: Long): String? {
+        if (cid < 0 || _private.value) return null
+        val conv = g.dao.conversation(cid) ?: return null
+        val windowStart = g.dao.recentMessages(cid, 17).firstOrNull()?.id ?: return conv.summary
+        val older = g.dao.messagesBetween(cid, conv.summaryUpTo, windowStart)
+        if (older.size < 6) return conv.summary
+        val updated = runCatching { summarize(conv.summary, older) }.getOrNull() ?: return conv.summary
+        g.dao.updateSummary(cid, updated, older.last().id)
+        return updated
+    }
+
+    private suspend fun summarize(previous: String, msgs: List<MessageEntity>): String {
+        val settings = g.settings.current.provider
+        val transcript = msgs.joinToString("\n") { "${it.role}: ${it.content.take(400)}" }
+        val turn = g.ai.chat(
+            settings,
+            listOf(
+                Msg.system("You compress chat history for an assistant that controls a phone. Keep facts, goals, outcomes, names and user preferences. Drop small talk."),
+                Msg.user("Previous summary:\n${previous.ifBlank { "(none)" }}\n\nNew messages:\n$transcript\n\nWrite the updated summary in under 200 words."),
+            ),
+            maxTokens = 400,
+        )
+        return turn.content.trim().take(1500)
     }
 
     private fun flashMood(v: String) {

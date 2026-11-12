@@ -2,6 +2,8 @@ package com.nyro.companion.data
 
 import android.content.Context
 import androidx.room.Dao
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.room.Database
 import androidx.room.Entity
 import androidx.room.Index
@@ -18,6 +20,10 @@ data class ConversationEntity(
     val title: String,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
+    /** Rolling summary of messages older than the live window. */
+    val summary: String = "",
+    /** Id of the last message included in [summary]. */
+    val summaryUpTo: Long = 0,
 )
 
 @Entity(tableName = "messages", indices = [Index("conversationId")])
@@ -60,6 +66,11 @@ interface NyroDao {
     suspend fun touchConversation(id: Long, title: String, t: Long = System.currentTimeMillis())
     @Query("SELECT * FROM conversations ORDER BY updatedAt DESC")
     fun conversations(): Flow<List<ConversationEntity>>
+    @Query("SELECT * FROM conversations WHERE id = :id LIMIT 1") suspend fun conversation(id: Long): ConversationEntity?
+    @Query("UPDATE conversations SET summary = :summary, summaryUpTo = :upTo WHERE id = :id")
+    suspend fun updateSummary(id: Long, summary: String, upTo: Long)
+    @Query("SELECT * FROM messages WHERE conversationId = :cid AND id > :afterId AND id < :beforeId ORDER BY id ASC LIMIT 60")
+    suspend fun messagesBetween(cid: Long, afterId: Long, beforeId: Long): List<MessageEntity>
     @Query("DELETE FROM conversations WHERE id = :id") suspend fun deleteConversation(id: Long)
     @Query("DELETE FROM conversations") suspend fun clearConversations()
 
@@ -91,14 +102,24 @@ interface NyroDao {
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, MemoryEntity::class, TaskEntity::class],
-    version = 1,
+    version = 2,
     exportSchema = false,
 )
 abstract class NyroDatabase : RoomDatabase() {
     abstract fun dao(): NyroDao
 
     companion object {
+        /** Adds conversation summaries. Existing conversations start with an empty summary. */
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE conversations ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE conversations ADD COLUMN summaryUpTo INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): NyroDatabase =
-            Room.databaseBuilder(context, NyroDatabase::class.java, "nyro.db").build()
+            Room.databaseBuilder(context, NyroDatabase::class.java, "nyro.db")
+                .addMigrations(MIGRATION_1_2)
+                .build()
     }
 }
