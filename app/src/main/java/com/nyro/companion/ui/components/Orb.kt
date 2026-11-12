@@ -46,8 +46,8 @@ fun orbLabel(s: OrbState) = when (s) {
 }
 
 private fun accentOf(s: OrbState) = when (s) {
-    OrbState.IDLE -> Nyro.Cyan; OrbState.LISTENING -> Color(0xFF5CF2FF); OrbState.THINKING -> Nyro.Violet
-    OrbState.SPEAKING -> Color(0xFF3CF0D0); OrbState.EXECUTING -> Nyro.Blue; OrbState.ERROR -> Nyro.Danger; OrbState.ATTENTION -> Nyro.Amber
+    OrbState.IDLE -> Nyro.Cyan; OrbState.LISTENING -> Nyro.Cyan; OrbState.THINKING -> Nyro.Violet
+    OrbState.SPEAKING -> Nyro.Teal; OrbState.EXECUTING -> Nyro.Blue; OrbState.ERROR -> Nyro.Danger; OrbState.ATTENTION -> Nyro.Amber
 }
 
 /**
@@ -90,7 +90,7 @@ private fun DrawScope.drawOrb(state: OrbState, accent: Color, spin: Float, pulse
     // Glass sphere
     drawCircle(
         Brush.radialGradient(
-            0f to Nyro.Ice.copy(alpha = 0.95f), 0.28f to accent.copy(alpha = 0.9f), 0.75f to Color(0xFF123C9C), 1f to Color(0xFF071233),
+            0f to Nyro.Ice.copy(alpha = 0.95f), 0.28f to accent.copy(alpha = 0.9f), 0.75f to Nyro.Blue.copy(alpha = 0.6f), 1f to Nyro.Void,
             center = Offset(cc.x - core * 0.3f, cc.y - core * 0.35f), radius = core * 1.45f,
         ), core, cc,
     )

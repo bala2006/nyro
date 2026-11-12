@@ -116,16 +116,16 @@ fun ProviderScreen(onBack: () -> Unit) {
         Chips(WireApi.entries.map { it.label }, WireApi.entries.indexOf(wireApi)) { wireApi = WireApi.entries[it] }
         Text(
             when (wireApi) {
-                WireApi.AUTO -> "Starts with Chat Completions and switches to the Responses API automatically when the model requires it for tool calling (e.g. GPT-5.6+ / GPT-6 reasoning models)."
+                WireApi.AUTO -> "Uses the Responses API for GPT-5.6 and GPT-6 deployments (name them after the model, e.g. gpt-6-luna). Other models use Chat Completions and switch on demand if tool calls need it."
                 WireApi.CHAT -> "Always Chat Completions. Reasoning models that refuse tools here get reasoning_effort=none."
                 WireApi.RESPONSES -> "Always the Responses API at {endpoint}/openai/v1/responses (stateless, store=false)."
             } + if (g.settings.current.provider.responsesDetectedFor.isNotBlank()) "\nDetected: ${g.settings.current.provider.responsesDetectedFor} uses the Responses API." else "",
             color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp),
         )
         SectionLabel("Reasoning effort")
-        val efforts = listOf("" to "Default", "none" to "None", "minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High")
+        val efforts = listOf("" to "Auto", "none" to "None", "low" to "Low", "medium" to "Medium", "high" to "High")
         Chips(efforts.map { it.second }, efforts.indexOfFirst { it.first == effort }.coerceAtLeast(0)) { effort = efforts[it].first }
-        Text("Lower effort answers faster; higher effort plans multi-step phone tasks more carefully. Ignored by models without reasoning.",
+        Text("Auto uses None for GPT-6 Luna and Sol: the fastest setting, and function tools work. Other models get no setting. Higher levels plan more carefully but respond more slowly.",
             color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 10.dp))
         OutlinedTextField(
             value = key, onValueChange = { key = it }, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),

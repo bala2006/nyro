@@ -87,7 +87,7 @@ fun TasksScreen(onBack: () -> Unit) {
         if (tasks.isEmpty()) Text("No tasks yet.", color = Nyro.TextLow)
         tasks.forEach { t ->
             var open by remember(t.id) { mutableStateOf(false) }
-            GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(22.dp)).clickable { open = !open }, padding = 14) {
+            GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).clickable { open = !open }, padding = 14) {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         val c = when (t.status) { "completed" -> Nyro.Ok; "failed" -> Nyro.Danger; "cancelled" -> Nyro.Amber; else -> Nyro.Cyan }
@@ -119,7 +119,7 @@ fun HistoryScreen(onBack: () -> Unit, onOpen: (Long) -> Unit) {
     ScreenFrame("History", onBack, actions = { IconButton(onClick = { confirm = true }) { Icon(Icons.Default.DeleteSweep, "Clear all", tint = Nyro.TextMid) } }) {
         if (convs.isEmpty()) Text("No conversations yet. They are stored only on this phone.", color = Nyro.TextLow)
         convs.forEach { c ->
-            GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(22.dp)).clickable { onOpen(c.id) }, padding = 14) {
+            GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).clickable { onOpen(c.id) }, padding = 14) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(c.title.ifBlank { "Conversation" }, color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall, maxLines = 2)

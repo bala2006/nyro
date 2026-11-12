@@ -2,6 +2,7 @@ package com.nyro.companion.agent
 
 import com.nyro.companion.ai.AiErrorKind
 import com.nyro.companion.ai.AiException
+import com.nyro.companion.ai.RAW_ITEMS_KEY
 import com.nyro.companion.ai.Msg
 import com.nyro.companion.ai.ToolCall
 import com.nyro.companion.core.AppGraph
@@ -30,6 +31,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -140,7 +142,10 @@ class Agent(private val g: AppGraph) {
         g.dao.recentMessages(cid, 17).dropLast(1).forEach { m ->
             messages += if (m.role == "user") Msg.user(m.content) else Msg.assistant(m.content)
         }
-        messages += Msg.user(text)
+        // Phone state (time, foreground app, device, memories) goes after the request, so the
+        // system prompt and everything before it stays byte-identical and cacheable.
+        messages += Msg.user(text + "\n\n<phone_state>\n" + stateBlock() + "\n</phone_state>")
+        val promptCacheKey = "nyro-conv-$cid"
 
         var taskId: Long? = null
         val log = StringBuilder()
@@ -150,7 +155,7 @@ class Agent(private val g: AppGraph) {
         try {
             for (iteration in 0 until MAX_ITERATIONS) {
                 _state.update { it.copy(phase = Phase.THINKING, reply = "") }
-                compact(messages)
+                compactIfNeeded(messages, log)
                 UiFeedback.status(null)
                 g.usage.turnStarted()
                 val onDelta = { d: String ->
@@ -158,17 +163,22 @@ class Agent(private val g: AppGraph) {
                     g.usage.onDelta(d)
                     tts.push(d)
                 }
+                val modelStart = System.currentTimeMillis()
                 val turn = try {
-                    g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta)
+                    g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta, cacheKey = promptCacheKey)
                 } catch (e: AiException) {
                     val imgs = messages.indices.filter { messages[it]["content"] is JsonArray }
                     if (e.kind != AiErrorKind.CAPABILITY && e.kind != AiErrorKind.BAD_REQUEST || imgs.isEmpty()) throw e
                     // The deployment rejected image input: continue with accessibility data only.
                     imgs.forEach { messages[it] = Msg.user("[Screenshot could not be sent: this deployment does not accept images. Use read_screen instead, or configure a vision deployment.]") }
-                    g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta)
+                    g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta, cacheKey = promptCacheKey)
                 }
+                val modelMs = System.currentTimeMillis() - modelStart
                 tts.flush()
                 g.usage.turnFinished(turn.usage)
+                turn.usage?.let { u ->
+                    log.append("  model %.1fs · input %d (cached %d, written %d) · output %d\n".format(modelMs / 1000.0, u.input, u.cached, u.cacheWrite, u.output))
+                }
 
                 if (turn.toolCalls.isEmpty()) {
                     val reply = turn.content.trim().ifEmpty { if (stepNo > 0) "Done." else "…" }
@@ -185,7 +195,9 @@ class Agent(private val g: AppGraph) {
                 messages += Msg.assistantToolCalls(turn.content, turn.toolCalls, turn.rawItems)
                 val images = ArrayList<JsonObject>()
                 for (call in turn.toolCalls) {
+                    val toolStart = System.currentTimeMillis()
                     val result = execute(call, ++stepNo, log)
+                    log.append("  tool ${System.currentTimeMillis() - toolStart} ms\n")
                     messages += Msg.tool(call.id, result.text.take(MAX_TOOL_CHARS))
                     result.imageJpeg?.let { images += Msg.userWithImage("Screenshot for tool call ${call.id}.", it) }
                 }
@@ -333,22 +345,43 @@ class Agent(private val g: AppGraph) {
     private fun updateStep(id: Int, status: StepStatus, detail: String) =
         _state.update { st -> st.copy(steps = st.steps.map { if (it.id == id) it.copy(status = status, detail = detail) else it }) }
 
-    /** Keeps the request small: only the newest screenshot stays, older screen dumps are shortened. */
-    private fun compact(messages: MutableList<JsonObject>) {
-        val imageIdx = messages.indices.filter { messages[it]["content"] is JsonArray }
-        imageIdx.dropLast(1).forEach { i -> messages[i] = Msg.user("[earlier screenshot removed]") }
-        val toolIdx = messages.indices.filter { (messages[it]["role"] as? JsonPrimitive)?.contentOrNull == "tool" }
-        toolIdx.dropLast(4).forEach { i ->
-            val m = messages[i]
-            val c = (m["content"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-            if (c.length > 700) messages[i] = buildJsonObject {
-                put("role", "tool"); put("tool_call_id", (m["tool_call_id"] as JsonPrimitive).content)
-                put("content", c.take(600) + "\n…[older output truncated]")
+    /** Rough token count: about 4 characters per token, about 1000 per image, plus encrypted reasoning. */
+    private fun estimateTokens(messages: List<JsonObject>): Int = messages.sumOf { m ->
+        val content = when (val c = m["content"]) {
+            is JsonPrimitive -> (c.contentOrNull?.length ?: 0) / 4
+            is JsonArray -> c.sumOf { part ->
+                val o = part.jsonObject
+                if ((o["type"] as? JsonPrimitive)?.contentOrNull == "image_url") 1000
+                else ((o["text"] as? JsonPrimitive)?.contentOrNull?.length ?: 0) / 4
             }
+            else -> 0
         }
+        content + ((m["tool_calls"]?.toString()?.length ?: 0) + (m[RAW_ITEMS_KEY]?.toString()?.length ?: 0)) / 4
     }
 
-    private suspend fun systemPrompt(): String {
+    /**
+     * Prompt caching needs the earlier messages to stay identical, so history is left alone until
+     * it reaches [COMPACT_AT_TOKENS]. Then the middle of the task is replaced with a summary built
+     * from the step log (no extra model call). The newest exchanges stay verbatim, and the cut never
+     * separates a tool call from its output.
+     */
+    private fun compactIfNeeded(messages: MutableList<JsonObject>, log: StringBuilder) {
+        if (estimateTokens(messages) < COMPACT_AT_TOKENS || messages.size < KEEP_TAIL_MESSAGES + 4) return
+        var cut = messages.size - KEEP_TAIL_MESSAGES
+        while (cut < messages.size && (messages[cut]["role"] as? JsonPrimitive)?.contentOrNull == "tool") cut++
+        if (cut <= 2 || cut >= messages.size) return
+        val summary = "Earlier in this task (summarized to fit the context budget). Steps taken:\n" +
+            log.toString().takeLast(MAX_SUMMARY_CHARS)
+        val head = messages.subList(0, 2).toList()
+        val tail = messages.subList(cut, messages.size).toList()
+        messages.clear()
+        messages.addAll(head)
+        messages += Msg.user(summary)
+        messages.addAll(tail)
+    }
+
+    /** Phone state for the newest request only: changes every task, so it sits after the cached prefix. */
+    private suspend fun stateBlock(): String {
         val memories = g.dao.memoryList(40)
         val now = SimpleDateFormat("EEEE, d MMMM yyyy, HH:mm", Locale.getDefault()).format(Date())
         val fg = g.accessibility()?.let { svc -> ScreenSession.read(svc).let { "${it.appLabel} (${it.packageName})" } } ?: "unknown (accessibility off)"
@@ -356,16 +389,30 @@ class Agent(private val g: AppGraph) {
             add(if (g.accessibility() != null) "phone control ON" else "phone control OFF (screen tools will fail; tell the user to enable NYRO Phone Control)")
             add(if (g.settings.current.allowScreenshots) "screenshots allowed" else "screenshots disabled by user")
         }.joinToString(", ")
+        return buildString {
+            append("Now: ").append(now).append('\n')
+            append("Phone: ").append(g.device.promptSummary()).append('\n')
+            append("Foreground app: ").append(fg).append('\n')
+            append("Capabilities: ").append(caps).append('\n')
+            if (memories.isNotEmpty()) {
+                append("Local memory about the user:\n")
+                memories.forEach { append("- ").append(it.content).append('\n') }
+            }
+        }.trimEnd()
+    }
+
+    /** Static instructions only: identical on every request so the cache prefix holds. */
+    private fun systemPrompt(): String {
         return """
 You are NYRO, a personal AI companion that lives on the user's Android phone and operates it for them. Personality: calm, warm, quick, quietly confident. You speak like a capable human assistant, not a chatbot.
 
-Phone: ${g.device.promptSummary()}. Now: $now. Foreground app: $fg. Capabilities: $caps.
 
 How you work:
 - You act through tools that run locally on the phone. Observe → act → observe. After every action, check the returned screen state to verify it worked before moving on. Never claim something happened unless a tool result confirms it.
 - For multi-step tasks: open the app (open_app), read the screen, then use element ids with tap_element / type_text / scroll. Prefer element ids over coordinates. If the accessibility tree lacks what you need (images, video, games, canvas UIs), use take_screenshot.
 - To search inside an app: tap its search control, type_text with submit=true, then confirm results appeared.
 - To send a message (WhatsApp, SMS, etc.): open the chat, type_text into the message box WITHOUT submit, then tap the Send button (usually desc "Send"). Done only when the message appears in the conversation and the box is empty.
+- The phone state block at the end of the user's message holds the current time, foreground app and memories. Use it; don't ask for it.
 - Work fast: don't call read_screen right after an action; action results already include the new screen.
 - If a step fails, try a sensible alternative (scroll, go back, re-read, search) up to a few times, then explain what blocked you.
 - The phone's safety layer may ask the user to confirm risky actions; if a tool returns DENIED, stop that path and ask the user.
@@ -373,7 +420,6 @@ How you work:
 - Device questions (battery, storage, RAM, sensors, network) must be answered from tools, not guesses.
 - Use remember only for lasting preferences/facts the user shares; never for secrets.
 - Replies are often spoken aloud: keep them short and natural (1–3 sentences), no markdown, no lists unless asked. While working, a brief progress phrase before tool calls is fine (e.g. "Opening YouTube.").
-${if (memories.isNotEmpty()) "\nWhat you remember about the user (local memory):\n" + memories.joinToString("\n") { "- ${it.content}" } else ""}
 """.trim()
     }
 
@@ -382,5 +428,10 @@ ${if (memories.isNotEmpty()) "\nWhat you remember about the user (local memory):
         const val MAX_TOOL_CHARS = 9000
         const val TOOL_TIMEOUT_MS = 45_000L
         const val CONFIRM_TIMEOUT_MS = 90_000L
+        /** Working budget for one task's prompt. Compaction starts at 90% of it, far below the model's 1M limit. */
+        const val WORKING_BUDGET_TOKENS = 120_000
+        const val COMPACT_AT_TOKENS = WORKING_BUDGET_TOKENS * 9 / 10
+        const val KEEP_TAIL_MESSAGES = 12
+        const val MAX_SUMMARY_CHARS = 6000
     }
 }

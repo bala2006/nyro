@@ -19,6 +19,10 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -127,93 +131,6 @@ fun OrbOverlay(
 }
 
 @Composable
-fun PanelOverlay(onCollapse: () -> Unit, onOpenApp: () -> Unit, onNormalMode: () -> Unit, onTyping: (Boolean) -> Unit) {
-    val g = NyroApp.graph
-    val st by g.agent.state.collectAsStateWithLifecycle()
-    val speaking by g.voice.speaking.collectAsStateWithLifecycle()
-    val mic by g.voice.micLevel.collectAsStateWithLifecycle()
-    val orb = orbStateOf(st, speaking)
-    val maxH = (LocalConfiguration.current.screenHeightDp * 0.62f).dp
-    var hasText by remember { mutableStateOf(false) }
-    var sendNow by remember { mutableStateOf(0) }
-    val scroll = rememberScrollState()
-    LaunchedEffect(st.reply.length, st.steps.size) { scroll.animateScrollTo(scroll.maxValue) }
-
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 10.dp)
-            .navigationBarsPadding()
-            .imePadding()
-            .padding(bottom = 8.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .background(Brush.verticalGradient(listOf(Color(0xF20B1630), Color(0xF7050810))))
-            .border(1.dp, Brush.verticalGradient(listOf(Nyro.Cyan.copy(alpha = 0.45f), Nyro.Blue.copy(alpha = 0.08f))), RoundedCornerShape(28.dp))
-            .padding(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            NyroOrb(orb, mic, Modifier.size(40.dp).clip(CircleShape).clickable { g.agent.startListening() })
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text("NYRO", style = MaterialTheme.typography.titleMedium, color = Nyro.TextHi)
-                Text(
-                    orbLabel(orb) + if (st.localOnly) " · local mode" else "",
-                    style = MaterialTheme.typography.labelSmall, color = Nyro.Cyan.copy(alpha = 0.85f),
-                )
-            }
-            IconButton(onClick = onOpenApp) { Icon(Icons.Default.OpenInNew, "Open NYRO", tint = Nyro.TextMid) }
-            IconButton(onClick = onNormalMode) { Icon(Icons.Default.PowerSettingsNew, "Switch to Normal Mode", tint = Nyro.TextMid) }
-            IconButton(onClick = onCollapse) { Icon(Icons.Default.KeyboardArrowDown, "Collapse", tint = Nyro.TextMid) }
-        }
-
-        st.confirmation?.let { c ->
-            Spacer(Modifier.size(8.dp))
-            ConfirmationCard(c.risk, c.text, onAllow = { g.agent.answerConfirmation(true) }, onDeny = { g.agent.answerConfirmation(false) })
-        }
-
-        Column(Modifier.heightIn(max = maxH).verticalScroll(scroll).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val heard = if (st.phase == com.nyro.companion.agent.Phase.LISTENING) st.partialTranscript else st.request
-            if (heard.isNotBlank()) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text(
-                        heard, color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.clip(RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp)).background(Nyro.Blue.copy(alpha = 0.25f)).padding(10.dp, 8.dp),
-                    )
-                }
-            } else if (st.phase == com.nyro.companion.agent.Phase.LISTENING) {
-                Text("Listening…", color = Nyro.TextMid, style = MaterialTheme.typography.bodyMedium)
-            } else if (st.reply.isBlank() && st.steps.isEmpty()) {
-                Text("Tap the mic and speak, or type a request. Try “Open YouTube and search for Android AI agents”.", color = Nyro.TextLow, style = MaterialTheme.typography.bodyMedium)
-            }
-            if (st.steps.isNotEmpty()) StepList(st.steps.takeLast(8))
-            if (st.reply.isNotBlank()) Text(st.reply, color = Nyro.TextHi, style = MaterialTheme.typography.bodyLarge)
-            st.error?.let { if (it != st.reply) Text(it, color = Nyro.Danger, style = MaterialTheme.typography.bodySmall) }
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            OverlayTextInput(
-                modifier = Modifier.weight(1f),
-                sendSignal = sendNow,
-                onTextChanged = { hasText = it.isNotBlank() },
-                onSend = { text -> g.agent.submit(text) },
-                onFocus = { focused ->
-                    if (focused && g.agent.state.value.phase == com.nyro.companion.agent.Phase.LISTENING) g.agent.startListening() // toggles listening off
-                    onTyping(focused)
-                },
-            )
-            Spacer(Modifier.width(6.dp))
-            if (hasText) {
-                RoundAction(Icons.AutoMirrored.Filled.Send, "Send", Nyro.Cyan) { sendNow++ }
-            } else if (st.taskActive || speaking) {
-                RoundAction(Icons.Default.Stop, "Stop", Nyro.Danger) { g.agent.stop() }
-            } else {
-                RoundAction(Icons.Default.Mic, "Talk", if (st.phase == com.nyro.companion.agent.Phase.LISTENING) Nyro.Cyan else Nyro.Blue) { g.agent.startListening() }
-            }
-        }
-    }
-}
-
-@Composable
 fun RoundAction(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, color: Color, onClick: () -> Unit) {
     Box(
         Modifier.size(48.dp).clip(CircleShape).background(Brush.radialGradient(listOf(color, color.copy(alpha = 0.55f)))).clickable(onClick = onClick),
@@ -235,71 +152,35 @@ private class OrbGesture {
 
 
 /**
- * Native EditText for the floating panel. Overlay windows live outside any Activity, and the
- * platform EditText reliably takes focus and raises the keyboard there.
+ * Approval card for risky actions, shown under the top status pill. It has no size when nothing
+ * needs approval, so it doesn't block touches on the apps beneath.
  */
 @Composable
-fun OverlayTextInput(
-    modifier: Modifier,
-    sendSignal: Int,
-    onTextChanged: (String) -> Unit,
-    onSend: (String) -> Unit,
-    onFocus: (Boolean) -> Unit,
-) {
-    val density = androidx.compose.ui.platform.LocalDensity.current.density
-    var edit by remember { mutableStateOf<android.widget.EditText?>(null) }
-    fun submit() {
-        val e = edit ?: return
-        val t = e.text?.toString()?.trim().orEmpty()
-        if (t.isEmpty()) return
-        e.setText("")
-        e.clearFocus()
-        e.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.hideSoftInputFromWindow(e.windowToken, 0)
-        onSend(t)
+fun ConfirmOverlay() {
+    val g = NyroApp.graph
+    val st by g.agent.state.collectAsStateWithLifecycle()
+    val c = st.confirmation ?: return
+    val accent = if (c.risk == com.nyro.companion.tools.Risk.HIGH) Nyro.Danger else Nyro.Amber
+    Column(
+        Modifier
+            .widthIn(max = 340.dp)
+            .padding(horizontal = 10.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Nyro.Glass.copy(alpha = 0.94f))
+            .border(1.dp, accent.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+            .padding(12.dp),
+    ) {
+        Text(
+            if (c.risk == com.nyro.companion.tools.Risk.HIGH) "HIGH-RISK ACTION" else "CONFIRM ACTION",
+            style = MaterialTheme.typography.labelSmall, color = accent,
+        )
+        Text(c.text, style = MaterialTheme.typography.bodyMedium, color = Nyro.TextHi)
+        Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { g.agent.answerConfirmation(false) }) { Text("Don't", color = Nyro.TextHi) }
+            Button(
+                onClick = { g.agent.answerConfirmation(true) },
+                colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Nyro.Void),
+            ) { Text("Allow") }
+        }
     }
-    LaunchedEffect(sendSignal) { if (sendSignal > 0) submit() }
-    androidx.compose.ui.viewinterop.AndroidView(
-        modifier = modifier
-            .clip(RoundedCornerShape(24.dp))
-            .background(Color(0x33000000))
-            .border(1.dp, Nyro.GlassEdge, RoundedCornerShape(24.dp)),
-        factory = { ctx ->
-            android.widget.EditText(ctx).apply {
-                edit = this
-                background = null
-                hint = "Type to NYRO…"
-                setHintTextColor(0xFF5E7097.toInt())
-                setTextColor(0xFFEAF2FF.toInt())
-                textSize = 15f
-                val ph = (16 * density).toInt(); val pv = (13 * density).toInt()
-                setPadding(ph, pv, ph, pv)
-                inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or android.text.InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
-                imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
-                setHorizontallyScrolling(false)
-                maxLines = 4
-                isFocusable = true
-                isFocusableInTouchMode = true
-                highlightColor = 0x5538E8FF
-                setOnEditorActionListener { _, action, ev ->
-                    if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEND || action == android.view.inputmethod.EditorInfo.IME_ACTION_DONE ||
-                        (ev?.keyCode == android.view.KeyEvent.KEYCODE_ENTER && ev.action == android.view.KeyEvent.ACTION_DOWN)) { submit(); true } else false
-                }
-                setOnFocusChangeListener { v, has ->
-                    onFocus(has)
-                    if (has) v.post {
-                        v.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
-                    }
-                }
-                setOnClickListener { v ->
-                    v.requestFocus()
-                    v.context.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(v, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)
-                }
-                addTextChangedListener(object : android.text.TextWatcher {
-                    override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                    override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { onTextChanged(s?.toString().orEmpty()) }
-                    override fun afterTextChanged(s: android.text.Editable?) {}
-                })
-            }
-        },
-    )
 }

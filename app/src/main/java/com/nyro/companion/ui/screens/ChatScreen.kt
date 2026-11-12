@@ -132,7 +132,7 @@ private fun Bubble(m: MessageEntity) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
         Box(
             Modifier.widthIn(max = 320.dp)
-                .clip(if (user) RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp) else RoundedCornerShape(18.dp, 18.dp, 18.dp, 4.dp))
+                .clip(if (user) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
                 .background(if (user) Nyro.Blue.copy(alpha = 0.28f) else Nyro.Navy.copy(alpha = 0.85f))
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
