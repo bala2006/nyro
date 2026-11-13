@@ -1,7 +1,10 @@
 package com.nyro.companion.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -94,6 +98,13 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         SectionLabel("Voice")
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
             Column {
+                Choice("Voice style", listOf("calm" to "Calm", "friendly" to "Friendly", "brisk" to "Brisk"), s.voiceStyle) { style ->
+                    val (rate, pitch) = when (style) { "calm" -> 0.9f to 0.95f; "brisk" -> 1.25f to 1.0f; else -> 1.0f to 1.1f }
+                    upd { it.copy(voiceStyle = style, speechRate = rate, speechPitch = pitch) }
+                }
+                Choice("Response length", listOf("short" to "Short", "natural" to "Natural", "detailed" to "Detailed"), s.responseLength) { v ->
+                    upd { it.copy(responseLength = v) }
+                }
                 Toggle("Speak replies", "Read NYRO's answers aloud with Android text-to-speech.", s.speakReplies) { v -> upd { it.copy(speakReplies = v) } }
                 Toggle("Continuous conversation", "After NYRO answers a spoken request, listen again automatically.", s.continuousConversation) { v -> upd { it.copy(continuousConversation = v) } }
                 Text("Speech rate ${"%.1f".format(s.speechRate)}×", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
@@ -224,6 +235,19 @@ private fun LanguagePicker(current: String, onPick: (String) -> Unit) {
         DropdownMenu(open, { open = false }) {
             langs.forEach { tag ->
                 DropdownMenuItem({ Text(if (tag.isEmpty()) "Phone default" else Locale.forLanguageTag(tag).displayName + " ($tag)") }, { onPick(tag); open = false })
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun Choice(title: String, options: List<Pair<String, String>>, selected: String, onPick: (String) -> Unit) {
+    Column(Modifier.padding(vertical = 6.dp)) {
+        Text(title, color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            options.forEach { (value, label) ->
+                FilterChip(selected = value == selected, onClick = { onPick(value) }, label = { Text(label) })
             }
         }
     }

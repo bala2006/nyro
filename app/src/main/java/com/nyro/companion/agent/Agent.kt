@@ -97,6 +97,7 @@ class Agent(private val g: AppGraph) {
     /** Plain-language summary of the most recent request sent to Azure (Privacy section on the Activity tab). */
     val lastSent: StateFlow<String> = _lastSent
     @Volatile private var currentRequest = ""
+    @Volatile private var lastActionLabel: String? = null
     private var lastFromVoice = false
 
     fun newConversation() { stop(); _conversationId.value = null; _state.value = AssistantState() }
@@ -359,6 +360,7 @@ class Agent(private val g: AppGraph) {
             ToolResult.fail("${tool.name} crashed: ${e.javaClass.simpleName} ${e.message.orEmpty()}")
         }
         val result = withRecovery(tool, firstResult)
+        if (result.ok) lastActionLabel = label
         if (result.ok) result.undo?.let { pushUndo(label) { it() } }
         // Verification: a successful action whose screen did not change is flagged, not reported as clean success.
         val detail = if (result.ok) {
@@ -547,6 +549,7 @@ class Agent(private val g: AppGraph) {
             append("Now: ").append(now).append('\n')
             append("Phone: ").append(g.device.promptSummary()).append('\n')
             append("Foreground app: ").append(fg).append('\n')
+            lastActionLabel?.let { append("Last action: ").append(it).append('\n') }
             append("Capabilities: ").append(caps).append('\n')
             if (memories.isNotEmpty()) {
                 append("Local memory about the user:\n")
@@ -573,7 +576,9 @@ How you work:
 - Never enter passwords, OTPs or payment details, never bypass lock screens, biometrics or permission dialogs that require the user. Ask the user to do those steps.
 - Device questions (battery, storage, RAM, sensors, network) must be answered from tools, not guesses.
 - Use remember only for lasting preferences/facts the user shares; never for secrets.
-- Replies are often spoken aloud: keep them short and natural (1–3 sentences), no markdown, no lists unless asked. While working, a brief progress phrase before tool calls is fine (e.g. "Opening YouTube.").
+- Reply length: ${when (g.settings.current.responseLength) { "short" -> "one short sentence unless the user asks for more"; "detailed" -> "explain the key details clearly, up to a short paragraph"; else -> "1–3 short sentences" }}. No markdown, no lists unless asked. While working, a brief progress phrase before tool calls is fine (e.g. "Opening YouTube.").
+- Reply in the same language the user speaks or writes in (English, Hindi, Telugu or another language).
+- Follow-ups: "do that again", "cancel it" or "the second one" refer to the last action and the recent screen in the phone state block.
 """.trim()
     }
 

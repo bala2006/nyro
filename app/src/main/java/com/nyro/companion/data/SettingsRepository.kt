@@ -82,6 +82,10 @@ data class NyroSettings(
     val orbOpacity: Float = 1.0f,
     val orbCompact: Boolean = false,
     val dockEdges: Boolean = true,
+    /** Reply length: short, natural or detailed. */
+    val responseLength: String = "natural",
+    /** Voice style preset: calm, friendly or brisk (sets speech rate and pitch). */
+    val voiceStyle: String = "friendly",
     val orbX: Int = -1,
     val orbY: Int = 400,
     val lastConnectionStatus: String = "",
@@ -117,6 +121,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val orbOpacity = floatPreferencesKey("orb_opacity")
         val orbCompact = booleanPreferencesKey("orb_compact")
         val dockEdges = booleanPreferencesKey("dock_edges")
+        val responseLength = stringPreferencesKey("response_length")
+        val voiceStyle = stringPreferencesKey("voice_style")
         val orbX = intPreferencesKey("orb_x")
         val orbY = intPreferencesKey("orb_y")
         val lastStatus = stringPreferencesKey("last_status")
@@ -158,6 +164,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         orbOpacity = this[K.orbOpacity] ?: 1.0f,
         orbCompact = this[K.orbCompact] ?: false,
         dockEdges = this[K.dockEdges] ?: true,
+        responseLength = this[K.responseLength] ?: "natural",
+        voiceStyle = this[K.voiceStyle] ?: "friendly",
         orbX = this[K.orbX] ?: -1,
         orbY = this[K.orbY] ?: 400,
         lastConnectionStatus = this[K.lastStatus] ?: "",
@@ -207,6 +215,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
             it[K.recLang] = n.recognitionLanguage
             it[K.confirmMedium] = n.confirmMediumRisk
             it[K.allowShots] = n.allowScreenshots
+            it[K.responseLength] = n.responseLength
+            it[K.voiceStyle] = n.voiceStyle
         }
     }
 }

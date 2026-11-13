@@ -40,24 +40,24 @@ Safety, visibility and reliability come first. Every later feature depends on th
 | 15 | Quick action ring | New | Long-press reveals 4–6 pinned actions in a ring. |
 | 16 | Dynamic orb size and transparency | New | Two sliders in settings. |
 | 17 | Visual task feedback | Exists | Focus ring, taps, typing indicator, scan sweep, status pill. |
-| 18 | Adaptive positioning | Partial | Edge snap exists. Avoid keyboards and key controls needs IME and node bounds checks. |
-| 8 | Conversation continuity | Partial | Last messages are sent. Add a summary of older turns so tasks continue without repeating instructions. |
-| 33 | Proactive suggestions | New | Suggestions appear in the Home tab, based on the foreground app. Nothing runs without a tap. |
+| 18 | Adaptive positioning | Partial | Moves above the keyboard. Avoiding other on-screen controls is not built. |
+| 8 | Conversation continuity | Done | Older messages are summarized once and included in later requests. Private sessions are skipped. |
+| 33 | Proactive suggestions | Partial | One tip per app per session when the app has suggestions. Nothing runs by itself. |
 | 73 | Contextual overlay | New | Shows suggested actions for the current screen; never executes them automatically. |
 
 ## Phase 3: Voice (after Phase 2)
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 19 | Natural voice conversation | Partial | Tap-to-talk and continuous listening exist. |
-| 20 | Voice interruption (barge-in) | Blocked | Needs echo-cancelled speech detection. Phone speakers often trigger false stops. Plan: tap the orb or say a stop word. |
+| 19 | Natural voice conversation | Partial | Tap-to-talk and continuous listening. Voice barge-in is not built. |
+| 20 | Voice interruption (barge-in) | Partial | Tap the orb to interrupt speech. Interrupting by voice is blocked (echo on phone speakers). |
 | 21 | Continuous listening | Exists | Setting exists. |
-| 22 | Wake word ("Hey NYRO") | Blocked | Needs a wake-word engine. Porcupine has a licensing requirement; Vosk runs offline. Also limited by Android's background microphone rules. **Decision needed.** |
-| 23 | Voice personalities | Partial | Voice picker and speed and pitch exist. Add named styles. |
-| 24 | Contextual follow-ups ("do that again", "cancel it") | Partial | Works through conversation history. Add explicit references to the last action and its target. |
-| 25 | Voice and text switching | Partial | Both work. Keep the same conversation in both. |
-| 26 | Multilingual conversation | Partial | Language choice exists. Hindi and Telugu depend on the phone's on-device recognition models. |
-| 27 | Adjustable response length | New | Short, detailed or conversational. Changes the instructions, not the model. |
+| 22 | Wake word ("Hey NYRO") | Blocked | Needs your decision: Porcupine (licensed) or Vosk (offline, free). |
+| 23 | Voice personalities | Done | Voice style presets: Calm, Friendly, Brisk. Voice picker and speed and pitch sliders remain. |
+| 24 | Contextual follow-ups ("do that again", "cancel it") | Partial | "Do that again" and "cancel it" use the last action. Picking "the second one" from a list is not built. |
+| 25 | Voice and text switching | Done | Voice and text share one conversation. |
+| 26 | Multilingual conversation | Partial | Replies follow the user's language. Recognition for Hindi and Telugu depends on the phone's speech models. |
+| 27 | Adjustable response length | Done | Short, natural or detailed replies. |
 
 ## Phase 4: Agent intelligence and personalization
 
@@ -129,3 +129,23 @@ Safety, visibility and reliability come first. Every later feature depends on th
 2. Wake word (22): choose Porcupine (licensed) or Vosk (offline, free), or defer.
 3. Model switching (64): drop it, or keep it for choosing the vision deployment only?
 4. Offline command mode: when Azure is unreachable, NYRO still answers device questions and opens apps. Keep it? It is local behavior, not a model fallback.
+
+## Open items after Phase 3
+
+These items were started but are not complete. Each one is listed by roadmap number.
+
+| # | Feature | Where it stands |
+|---|---|---|
+| 1 | Guided permissions | First missing step is shown. No step-by-step animation or per-step explanation. |
+| 3 | Live task timeline | Shown on the Activity tab, not as a separate screen. |
+| 5 | Undo | Only typed text and the flashlight. Taps and sent messages can't be undone. |
+| 6 | Action preview | Only sent text shows the full text. Taps show the label only. |
+| 10 | Error recovery | Re-reads the screen only when an element has moved. |
+| 18 | Adaptive positioning | Keyboard only. Avoiding other on-screen controls is not built. |
+| 20 | Barge-in | Tap to interrupt. Voice interruption is blocked by echo on phone speakers. |
+| 22 | Wake word | Blocked on a decision: Porcupine or Vosk. |
+| 24 | Follow-ups | Choosing from a list ("the second one") is not built. |
+| 26 | Multilingual | Recognition for Hindi and Telugu depends on the phone's speech models. |
+| 33 | Proactive suggestions | One tip per app. No suggestions while a task runs. |
+
+Later phases (4 to 8) are not started. The Phase 4 items include app skills (#31), personal commands (#36), and task memory (#32).
