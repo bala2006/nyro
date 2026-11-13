@@ -19,14 +19,14 @@ Safety, visibility and reliability come first. Every later feature depends on th
 | 5 | Undo last action | Partial | Typed text and flashlight only. Taps and sent messages can't be undone. |
 | 6 | Action preview | Partial | Full text shown for sent messages. Taps show the label only. |
 | 9 | Global emergency stop | Done | Stop button, long-press, notification action, and the Stop chip. |
-| 10 | Smart error recovery | Partial | Re-reads the screen when an element has moved. No other recovery. |
-| 29 | Self-verification | Partial | Unchanged screens are flagged on the step. No deeper check of the result. |
+| 10 | Smart error recovery | Partial | Re-reads the screen when an element has moved. Plans retry an ignored tap once as a real touch, stop at unexpected screens, and hand back to Azure. Loop detection refuses repeated actions. |
+| 29 | Self-verification | Partial | Every plan step has an expectation (default: the screen changed) checked against the live screen. Free-form tool calls only flag unchanged screens. |
 | 52 | Private sessions | Done | Private session: nothing written to history, tasks or memory. |
 | 62 | Token usage dashboard | Done | Token dashboard on the Activity tab: task, all time, input, output, cache, speed. |
 | 63 | API cost estimation | Done | Estimated cost with editable prices on the Activity tab. |
 | 69 | Connection diagnostics | Done | Test connection names the failing part: key, deployment, endpoint, quota, network. |
 | 70 | Privacy monitor | Partial | Last 10 requests with time, message count, screenshot count, tokens. Not per field. |
-| 67 | Context optimization | Partial | Caching, compaction and smaller screenshots. No per-request controls. |
+| 67 | Context optimization | Partial | Caching, compaction at ~36k tokens, compact screen results, unchanged screens sent as one line, no automatic screenshots. No per-request controls. |
 | 68 | Response speed settings | Done | Fast, Balanced, Thorough and Deep reasoning levels. |
 
 ## Phase 2: Core experience (new information architecture and the orb)
@@ -63,8 +63,8 @@ Safety, visibility and reliability come first. Every later feature depends on th
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 28 | Multi-step planning | Partial | The model plans step by step. Add a visible plan in the timeline. |
-| 30 | Adaptive automation | Partial | Re-reads the screen when a step fails. |
+| 28 | Multi-step planning | Partial | `run_plan`: the model plans several steps at once, Kotlin executes and verifies them. Steps show in the timeline. No separate plan preview yet. |
+| 30 | Adaptive automation | Partial | Re-reads the screen when a step fails; plans scroll to find targets and recover once. |
 | 31 | App-specific skills | Partial | WhatsApp: send a message by contact name, with checks. Other apps not built yet. |
 | 32 | Task memory (unfinished tasks) | Not started | Task memory for unfinished tasks not built. |
 | 34 | Multi-tool reasoning | Exists | The agent combines device, screen and app tools. |
@@ -140,16 +140,16 @@ Everything not marked Done or Exists is listed here.
 | 3 | Live task timeline | Partial | Live steps on the Activity tab, not a separate timeline screen. |
 | 5 | Undo last action | Partial | Typed text and flashlight only. Taps and sent messages can't be undone. |
 | 6 | Action preview | Partial | Full text shown for sent messages. Taps show the label only. |
-| 10 | Smart error recovery | Partial | Re-reads the screen when an element has moved. No other recovery. |
+| 10 | Smart error recovery | Partial | Re-reads the screen when an element has moved. Plans retry an ignored tap once as a real touch, stop at unexpected screens, and hand back to Azure. Loop detection refuses repeated actions. |
 | 18 | Adaptive positioning | Partial | Moves above the keyboard. Avoiding other on-screen controls is not built. |
 | 19 | Natural voice conversation | Partial | Tap-to-talk and continuous listening. Voice barge-in is not built. |
 | 20 | Voice interruption (barge-in) | Partial | Tap the orb to interrupt speech. Interrupting by voice is blocked (echo on phone speakers). |
 | 22 | Wake word ("Hey NYRO") | Blocked | Needs your decision: Porcupine (licensed) or Vosk (offline, free). |
 | 24 | Contextual follow-ups ("do that again", "cancel it") | Partial | "Do that again" and "cancel it" use the last action. Picking "the second one" from a list is not built. |
 | 26 | Multilingual conversation | Partial | Replies follow the user's language. Recognition for Hindi and Telugu depends on the phone's speech models. |
-| 28 | Multi-step planning | Partial | The model plans step by step. Add a visible plan in the timeline. |
-| 29 | Self-verification | Partial | Unchanged screens are flagged on the step. No deeper check of the result. |
-| 30 | Adaptive automation | Partial | Re-reads the screen when a step fails. |
+| 28 | Multi-step planning | Partial | `run_plan`: the model plans several steps at once, Kotlin executes and verifies them. Steps show in the timeline. No separate plan preview yet. |
+| 29 | Self-verification | Partial | Every plan step has an expectation (default: the screen changed) checked against the live screen. Free-form tool calls only flag unchanged screens. |
+| 30 | Adaptive automation | Partial | Re-reads the screen when a step fails; plans scroll to find targets and recover once. |
 | 31 | App-specific skills | Partial | WhatsApp: send a message by contact name, with checks. Other apps not built yet. |
 | 32 | Task memory (unfinished tasks) | Not started | Task memory for unfinished tasks not built. |
 | 33 | Proactive suggestions | Partial | One tip per app per session. No suggestions while a task runs. |
@@ -172,7 +172,7 @@ Everything not marked Done or Exists is listed here.
 | 60 | Performance assistant | Partial | Rule-based memory and thermal checks. No per-app culprit. |
 | 61 | Device troubleshooter | Partial | Permission, network and storage checks. App-specific diagnosis not built. |
 | 64 | Model switching | Blocked | Conflicts with the single-model decision. **Decision needed.** |
-| 67 | Context optimization | Partial | Caching, compaction and smaller screenshots. No per-request controls. |
+| 67 | Context optimization | Partial | Caching, compaction at ~36k tokens, compact screen results, unchanged screens sent as one line, no automatic screenshots. No per-request controls. |
 | 70 | Privacy monitor | Partial | Last 10 requests with time, message count, screenshot count, tokens. Not per field. |
 | 71 | Contextual intelligence | Partial | Foreground app and recent conversation are included. |
 | 72 | Cross-app workflows | Partial | Possible through the tools; skills (31) make it reliable. |

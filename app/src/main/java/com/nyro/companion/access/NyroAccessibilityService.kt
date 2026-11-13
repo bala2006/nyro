@@ -8,7 +8,13 @@ import android.os.SystemClock
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import com.nyro.companion.NyroApp
+import com.nyro.companion.exec.EventGate
+import com.nyro.companion.exec.EventKind
 import com.nyro.companion.overlay.NyroModeService
+import com.nyro.companion.perf.Metric
+import com.nyro.companion.perf.Perf
+import com.nyro.companion.perf.RealClock
+import com.nyro.companion.ui.MainActivity
 import com.nyro.companion.overlay.UiFeedback
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,8 +30,13 @@ import kotlin.coroutines.resume
  */
 class NyroAccessibilityService : AccessibilityService() {
 
-    @Volatile var lastEventAt: Long = 0L; private set
     @Volatile var foregroundPackage: String = ""; private set
+
+    /**
+     * Accessibility events turned into version counters and bounded waits (see [EventGate]). Events from NYRO's own
+     * overlay are ignored, so its status pill and focus ring never look like the user's UI changing.
+     */
+    val gate: EventGate by lazy { EventGate(RealClock, packageName) }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -35,7 +46,17 @@ class NyroAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-        lastEventAt = SystemClock.uptimeMillis()
+        gate.onEvent(
+            when (event.eventType) {
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> EventKind.WINDOW_STATE
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> EventKind.WINDOW_CONTENT
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED -> EventKind.WINDOWS
+                AccessibilityEvent.TYPE_VIEW_SCROLLED -> EventKind.SCROLL
+                AccessibilityEvent.TYPE_VIEW_FOCUSED -> EventKind.FOCUS
+                else -> EventKind.OTHER
+            },
+            event.packageName?.toString(),
+        )
         if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             NyroModeService.instance?.onKeyboardState(ScreenReader.keyboardOpen(this))
         }
@@ -44,6 +65,10 @@ class NyroAccessibilityService : AccessibilityService() {
             if (pkg.isNotEmpty() && pkg != packageName && pkg != foregroundPackage) {
                 foregroundPackage = pkg
                 NyroModeService.instance?.onForegroundApp(pkg)
+            } else if (pkg == packageName && event.className?.toString() == MainActivity::class.java.name && foregroundPackage != pkg) {
+                // NYRO's own screen is in front. Its overlay windows also send events from this package, but not as this activity,
+                // so they do not take the foreground away from the app underneath.
+                foregroundPackage = pkg
             }
         }
     }
@@ -60,14 +85,12 @@ class NyroAccessibilityService : AccessibilityService() {
         return super.onUnbind(intent)
     }
 
-    /** Waits until no accessibility events arrived for [quietMs], bounded by [timeoutMs]. */
-    suspend fun waitForIdle(quietMs: Long = 350, timeoutMs: Long = 3000) {
-        val start = SystemClock.uptimeMillis()
-        delay(120)
-        while (SystemClock.uptimeMillis() - start < timeoutMs) {
-            if (SystemClock.uptimeMillis() - lastEventAt >= quietMs) return
-            delay(60)
-        }
+    /**
+     * Kept for older call sites. Returns immediately when the UI is already quiet instead of always paying a fixed delay.
+     * Prefer [EventGate.awaitSettled] with the version captured before the action.
+     */
+    suspend fun waitForIdle(quietMs: Long = 150, timeoutMs: Long = 1500) {
+        Perf.time(Metric.UI_WAIT) { gate.awaitQuiet(quietMs, timeoutMs) }
     }
 
     // ---------------- Gestures ----------------
@@ -87,12 +110,12 @@ class NyroAccessibilityService : AccessibilityService() {
         return gesture(Path().apply { moveTo(x1, y1); lineTo(x2, y2) }, 0, durationMs.coerceIn(80, 3000))
     }
 
-    private suspend fun gesture(path: Path, start: Long, duration: Long): Boolean {
+    private suspend fun gesture(path: Path, start: Long, duration: Long): Boolean = Perf.time(Metric.GESTURE) {
         UiFeedback.setTouchPassThrough(true)
         try {
             val stroke = GestureDescription.StrokeDescription(path, start, duration)
             val g = GestureDescription.Builder().addStroke(stroke).build()
-            return withTimeoutOrNull(duration + 4000) {
+            withTimeoutOrNull(duration + 4000) {
                 suspendCancellableCoroutine { cont ->
                     val ok = dispatchGesture(g, object : GestureResultCallback() {
                         override fun onCompleted(d: GestureDescription?) { if (cont.isActive) cont.resume(true) }
@@ -102,7 +125,6 @@ class NyroAccessibilityService : AccessibilityService() {
                 }
             } ?: false
         } finally {
-            delay(40)
             UiFeedback.setTouchPassThrough(false)
         }
     }
@@ -116,9 +138,15 @@ class NyroAccessibilityService : AccessibilityService() {
         data class Failed(val reason: String) : Shot()
     }
 
-    /** API 30+ accessibility screenshot. Respects FLAG_SECURE: secure windows are refused by the system. */
+    @Volatile private var lastShotAt = 0L
+
+    /**
+     * API 30+ accessibility screenshot. Respects FLAG_SECURE: secure windows are refused by the system.
+     * Android rate-limits captures. Instead of a fixed 1.1 s sleep after a refusal, retry with short growing waits.
+     */
     suspend fun screenshot(): Shot {
-        repeat(3) { attempt ->
+        val waits = longArrayOf(250, 500, 900)
+        repeat(waits.size + 1) { attempt ->
             val r = withTimeoutOrNull(5000) {
                 suspendCancellableCoroutine<Shot> { cont ->
                     takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
@@ -141,8 +169,12 @@ class NyroAccessibilityService : AccessibilityService() {
                     })
                 }
             } ?: Shot.Failed("Screenshot timed out.")
-            if (r is Shot.Failed && r.reason == "RATE" && attempt < 2) { delay(1100); return@repeat }
-            return if (r is Shot.Failed && r.reason == "RATE") Shot.Failed("Screenshots requested too quickly.") else r
+            if (r is Shot.Ok) lastShotAt = SystemClock.elapsedRealtime()
+            if (r is Shot.Failed && r.reason == "RATE") {
+                if (attempt < waits.size) { delay(waits[attempt]); return@repeat }
+                return Shot.Failed("Screenshots requested too quickly.")
+            }
+            return r
         }
         return Shot.Failed("Screenshot failed.")
     }

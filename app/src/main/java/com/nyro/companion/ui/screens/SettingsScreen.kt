@@ -181,6 +181,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
             Column {
                 Toggle("Confirm medium-risk actions", "Ask before sending, sharing, posting or changing settings, unless your request already asked for it (\u201csend hello to Pranav\u201d sends without asking again). High-risk actions (payments, purchases, deletion, security) always ask.", s.confirmMediumRisk) { v -> upd { it.copy(confirmMediumRisk = v) } }
+                Toggle("Fast local commands", "Handle simple requests (open an app, battery, storage, notifications, settings pages, flashlight, timers) on the phone without calling Azure. Anything unclear still goes to Azure.", s.fastLocalCommands) { v -> upd { it.copy(fastLocalCommands = v) } }
                 Toggle("Allow screenshots for vision", "Lets NYRO send a screenshot to your Azure endpoint when accessibility info isn't enough. A notice appears every time.", s.allowScreenshots) { v -> upd { it.copy(allowScreenshots = v) } }
             }
         }

@@ -3,7 +3,9 @@ package com.nyro.companion.ai
 import com.nyro.companion.data.ProviderConfig
 import com.nyro.companion.data.ProviderType
 import com.nyro.companion.data.WireApi
+import com.nyro.companion.perf.RealClock
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -50,7 +52,19 @@ data class AiTurn(
     /** Responses API only: the raw output items (reasoning, function_call, message) to replay next turn. */
     val rawItems: JsonArray? = null,
     val usage: Usage? = null,
+    val timing: AiTiming? = null,
 )
+
+/**
+ * Where the time of one request went, measured with a monotonic clock.
+ * [headersMs]: request written until response headers arrived (includes uploading images and the server's queueing).
+ * [firstEventMs]: request written until the first generated output arrived (text, a tool call or an output item), i.e. time to
+ * first token; -1 when the response was not streamed.
+ */
+data class AiTiming(val prepMs: Long, val headersMs: Long, val firstEventMs: Long, val totalMs: Long, val requestBytes: Int)
+
+/** Set by the stream readers when the first event arrives. */
+internal class TimingProbe { @Volatile var firstEventAt: Long = -1L }
 
 /** [cached]: input tokens served from the prompt cache. [cacheWrite]: tokens written to it (GPT-5.6+ bills these). */
 data class Usage(val input: Long, val output: Long, val total: Long, val cached: Long = 0, val cacheWrite: Long = 0)
@@ -148,6 +162,27 @@ class AzureClient(
         .writeTimeout(60, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
         .build()
+
+    // ---------- Connection warm-up ----------
+
+    @Volatile private var lastPrewarmAt = 0L
+
+    /**
+     * Opens the TCP and TLS connection to the endpoint ahead of the first request (DNS, handshake, HTTP/2 setup cost a few
+     * hundred milliseconds on mobile). Sends nothing but a HEAD request without credentials, and is rate-limited.
+     * OkHttp keeps the connection in its pool, so the next chat() reuses it.
+     */
+    fun prewarm(cfg: ProviderConfig) {
+        if (validate(cfg) != null) return
+        val now = RealClock.now()
+        if (now - lastPrewarmAt < 20_000) return
+        lastPrewarmAt = now
+        val url = baseOf(cfg.endpoint).toHttpUrlOrNull() ?: return
+        http.newCall(Request.Builder().url(url).head().build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {}
+            override fun onResponse(call: Call, response: Response) { response.close() }
+        })
+    }
 
     // ---------- URL / validation ----------
 
@@ -321,6 +356,7 @@ class AzureClient(
         wire: WireKind,
         body: (stream: Boolean) -> JsonObject,
     ): AiTurn = withContext(Dispatchers.IO) {
+        val tStart = RealClock.now()
         var stream = onDelta != null
         var attempt = 0
         var emitted = false
@@ -332,23 +368,36 @@ class AzureClient(
             var b = body(stream)
             if (dropInclude) b = JsonObject(b - "include")
             if (dropStreamOptions) b = JsonObject(b - "stream_options")
+            val payload = b.toString()
             val req = Request.Builder()
                 .url(if (wire == WireKind.RESPONSES) responsesUrlFor(cfg) else urlFor(cfg, deployment))
                 .header("api-key", key)
                 .header("Content-Type", "application/json")
                 .header("Accept", if (stream) "text/event-stream" else "application/json")
-                .post(b.toString().toRequestBody(JSON_MT))
+                .post(payload.toRequestBody(JSON_MT))
                 .build()
+            val call = http.newCall(req)
+            // Stop must also interrupt a response that is already streaming, not only the wait for headers.
+            val cancelOnStop = kotlin.coroutines.coroutineContext[Job]?.invokeOnCompletion { if (it is CancellationException) call.cancel() }
+            val tSent = RealClock.now()
             try {
-                val resp = http.newCall(req).await()
+                val resp = call.await()
+                val tHeaders = RealClock.now()
                 resp.use { r ->
                     if (!r.isSuccessful) throw mapHttpError(r.code, r.body?.string().orEmpty(), r.header("Retry-After"))
-                    return@withContext when {
-                        wire == WireKind.RESPONSES && stream -> readResponsesStream(r, delta!!)
+                    val probe = TimingProbe()
+                    val turn = when {
+                        wire == WireKind.RESPONSES && stream -> readResponsesStream(r, delta!!, probe)
                         wire == WireKind.RESPONSES -> parseResponse(r.body?.string().orEmpty().let { json.parseToJsonElement(it).jsonObject })
-                        stream -> readStream(r, delta!!)
+                        stream -> readStream(r, delta!!, probe)
                         else -> readFull(r.body?.string().orEmpty())
                     }
+                    val tEnd = RealClock.now()
+                    return@withContext turn.copy(timing = AiTiming(
+                        prepMs = tSent - tStart, headersMs = tHeaders - tSent,
+                        firstEventMs = if (probe.firstEventAt >= 0) probe.firstEventAt - tSent else -1,
+                        totalMs = tEnd - tSent, requestBytes = payload.length,
+                    ))
                 }
             } catch (e: AiException) {
                 val msg = e.message.orEmpty()
@@ -371,6 +420,8 @@ class AzureClient(
                 throw mapped
             } catch (e: kotlinx.serialization.SerializationException) {
                 throw AiException(AiErrorKind.SERVER, "Unreadable response from endpoint.")
+            } finally {
+                cancelOnStop?.dispose()
             }
         }
         @Suppress("UNREACHABLE_CODE") error("unreachable")
@@ -378,7 +429,7 @@ class AzureClient(
 
     // ---------- Responses API parsing ----------
 
-    private suspend fun readResponsesStream(r: Response, onDelta: (String) -> Unit): AiTurn {
+    private suspend fun readResponsesStream(r: Response, onDelta: (String) -> Unit, probe: TimingProbe): AiTurn {
         val source = r.body?.source() ?: throw AiException(AiErrorKind.SERVER, "Empty response body")
         val ctx = kotlin.coroutines.coroutineContext
         val text = StringBuilder()
@@ -391,7 +442,10 @@ class AzureClient(
             if (data.isEmpty() || data == "[DONE]") continue
             val ev = runCatching { json.parseToJsonElement(data).jsonObject }.getOrNull() ?: continue
             when (ev.str("type")) {
-                "response.output_text.delta" -> ev.str("delta")?.let { if (it.isNotEmpty()) { text.append(it); onDelta(it) } }
+                "response.output_item.added", "response.function_call_arguments.delta" -> if (probe.firstEventAt < 0) probe.firstEventAt = RealClock.now()
+            }
+            when (ev.str("type")) {
+                "response.output_text.delta" -> ev.str("delta")?.let { if (it.isNotEmpty()) { if (probe.firstEventAt < 0) probe.firstEventAt = RealClock.now(); text.append(it); onDelta(it) } }
                 "response.completed", "response.incomplete" -> { final = ev["response"]?.jsonObject; break }
                 "response.failed" -> {
                     val err = ev["response"]?.jsonObject?.get("error")?.jsonObject
@@ -432,7 +486,7 @@ class AzureClient(
         )
     }
 
-    private suspend fun readStream(r: Response, onDelta: (String) -> Unit): AiTurn {
+    private suspend fun readStream(r: Response, onDelta: (String) -> Unit, probe: TimingProbe): AiTurn {
         val source = r.body?.source() ?: throw AiException(AiErrorKind.SERVER, "Empty response body")
         val content = StringBuilder()
         val calls = sortedMapOf<Int, Triple<StringBuilder, StringBuilder, StringBuilder>>() // id, name, args
@@ -456,8 +510,9 @@ class AzureClient(
                 val c = ch.jsonObject
                 c.str("finish_reason")?.let { finish = it }
                 val delta = c["delta"] as? JsonObject ?: continue
-                delta.str("content")?.let { if (it.isNotEmpty()) { content.append(it); onDelta(it) } }
+                delta.str("content")?.let { if (it.isNotEmpty()) { if (probe.firstEventAt < 0) probe.firstEventAt = RealClock.now(); content.append(it); onDelta(it) } }
                 (delta["tool_calls"] as? JsonArray)?.forEach { tcEl ->
+                    if (probe.firstEventAt < 0) probe.firstEventAt = RealClock.now()
                     val tc = tcEl.jsonObject
                     val idx = tc["index"]?.jsonPrimitive?.intOrNull ?: calls.size
                     val slot = calls.getOrPut(idx) { Triple(StringBuilder(), StringBuilder(), StringBuilder()) }

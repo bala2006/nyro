@@ -6,7 +6,6 @@ import com.nyro.companion.access.ScreenReader
 import com.nyro.companion.access.ScreenSnapshot
 import com.nyro.companion.access.UiElement
 import com.nyro.companion.overlay.UiFeedback
-import kotlinx.coroutines.delay
 
 /**
  * App-specific skills: fixed, verified steps for one app. The model chooses the skill and the
@@ -86,23 +85,23 @@ private suspend fun whatsappSend(contact: String, text: String): ToolResult {
     }
 }
 
-/** Polls the screen until [ready] is true or time runs out. Returns the snapshot that matched. */
+/** Waits (event-driven, with a polling fallback) until [ready] holds for a fresh snapshot. Returns the snapshot that matched. */
 private suspend fun settle(svc: NyroAccessibilityService, timeoutMs: Long, ready: (ScreenSnapshot) -> Boolean): ScreenSnapshot? {
-    val start = System.currentTimeMillis()
-    while (System.currentTimeMillis() - start < timeoutMs) {
-        val snap = ScreenSession.read(svc)
-        if (ready(snap)) return snap
-        delay(250)
+    var hit: ScreenSnapshot? = null
+    svc.gate.awaitCondition(timeoutMs, pollMs = 250) {
+        val snap = ScreenSession.read(svc, ScreenReader.OBSERVE_BUDGET_MS)
+        if (ready(snap)) { hit = snap; true } else false
     }
-    return null
+    return hit
 }
 
 private suspend fun tap(svc: NyroAccessibilityService, e: UiElement) {
     UiFeedback.focus(e.bounds)
+    val since = svc.gate.version
     if (ScreenReader.clickNode(e.node)) {
         UiFeedback.showTap(e.bounds.exactCenterX(), e.bounds.exactCenterY())
     } else {
         svc.tap(e.bounds.exactCenterX(), e.bounds.exactCenterY())
     }
-    svc.waitForIdle(quietMs = 250, timeoutMs = 2000)
+    svc.gate.awaitSettled(since, firstEventTimeoutMs = 350, quietMs = 150, maxMs = 1500)
 }

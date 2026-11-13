@@ -113,6 +113,8 @@ fun ActivityScreen(go: (String) -> Unit) {
             }
         }
 
+        DiagnosticsSection()
+
         Gap(12)
         SectionLabel("History")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {

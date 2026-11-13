@@ -71,6 +71,8 @@ data class NyroSettings(
     val recognitionLanguage: String = "",
     val confirmMediumRisk: Boolean = true,
     val allowScreenshots: Boolean = true,
+    /** Resolve simple requests (open an app, battery, storage, notifications, settings pages...) on the phone without calling Azure. */
+    val fastLocalCommands: Boolean = true,
     /** Dark is the default; false selects the light palette. */
     val darkTheme: Boolean = true,
     /** Prices per 1M tokens, used only for the cost estimate on the Activity tab. Edit to match your Azure pricing. */
@@ -117,6 +119,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val recLang = stringPreferencesKey("rec_lang")
         val confirmMedium = booleanPreferencesKey("confirm_medium")
         val allowShots = booleanPreferencesKey("allow_screenshots")
+        val fastLocal = booleanPreferencesKey("fast_local_commands")
         val darkTheme = booleanPreferencesKey("dark_theme")
         val priceIn = floatPreferencesKey("price_input")
         val priceCached = floatPreferencesKey("price_cached")
@@ -162,6 +165,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         recognitionLanguage = this[K.recLang] ?: "",
         confirmMediumRisk = this[K.confirmMedium] ?: true,
         allowScreenshots = this[K.allowShots] ?: true,
+        fastLocalCommands = this[K.fastLocal] ?: true,
         darkTheme = this[K.darkTheme] ?: true,
         priceInput = this[K.priceIn] ?: 0.10f,
         priceCached = this[K.priceCached] ?: 0.01f,
@@ -227,6 +231,7 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
             it[K.recLang] = n.recognitionLanguage
             it[K.confirmMedium] = n.confirmMediumRisk
             it[K.allowShots] = n.allowScreenshots
+            it[K.fastLocal] = n.fastLocalCommands
             it[K.responseLength] = n.responseLength
             it[K.voiceStyle] = n.voiceStyle
         }
