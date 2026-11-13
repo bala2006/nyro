@@ -56,6 +56,11 @@ fun QuickActions(onDone: () -> Unit) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             AssistChip(onClick = { g.agent.startListening(); onDone() }, label = { Text("Talk") })
             AssistChip(onClick = { g.agent.submit("What is on my screen right now? Describe it briefly."); onDone() }, label = { Text("What's on screen?") })
+            AssistChip(onClick = { g.agent.submit("Explain the error or warning shown on my screen, and what to do about it."); onDone() }, label = { Text("Explain this error") })
+            AssistChip(onClick = { g.agent.submit("Translate the visible text on my screen into English. List only the translation."); onDone() }, label = { Text("Translate screen") })
+            if (com.nyro.companion.access.NyroNotificationListener.instance != null) {
+                AssistChip(onClick = { g.agent.submit("Summarize my current notifications in two or three sentences."); onDone() }, label = { Text("Summarize notifications") })
+            }
             undo?.let { label -> AssistChip(onClick = { scope.launch { g.agent.undoLast() }; onDone() }, label = { Text("Undo: $label") }) }
             if (st.taskActive) AssistChip(onClick = { g.agent.stop(); onDone() }, label = { Text("Stop") })
             suggestionsFor(pkg).forEach { text -> AssistChip(onClick = { g.agent.submit(text); onDone() }, label = { Text(text) }) }

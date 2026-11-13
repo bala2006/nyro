@@ -12,38 +12,38 @@ Safety, visibility and reliability come first. Every later feature depends on th
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 1 | Smart permission setup | Partial | Permissions screen exists. Add a guided flow in order: overlay, mic, accessibility, notifications, battery. |
-| 2 | Capability dashboard | Partial | Dashboard status chips exist. Expand to a full "can / cannot do" list. |
-| 3 | Live task timeline | Partial | Steps are in the Tasks screen. Make it live and visible on the Activity tab. |
-| 4 | Pause / resume | New | Pause keeps the step log and context. Resume continues from the log. It is not a process freeze, so the screen may have changed. |
-| 5 | Undo last action | Partial | Only reversible actions can be undone (drafted text, toggles, memory adds). A sent message cannot be unsent. |
-| 6 | Action preview | New | Show the exact text and target before a Medium or High action runs. |
-| 9 | Global emergency stop | Exists | Stop button, long-press, notification action. Extend to cancel speech and pending requests in one place. |
-| 10 | Smart error recovery | Partial | Prompt guidance exists. Add structured recovery steps (re-read, scroll, go back, retry once). |
-| 29 | Self-verification | Partial | Each action reports whether the screen changed. Make the result explicit per step. |
-| 52 | Private sessions | New | Conversations with no history or memory writes. |
-| 62 | Token usage dashboard | Partial | Overlay shows totals. Add a dashboard with per-request and per-task numbers. |
-| 63 | API cost estimation | New | Editable price per 1M input, cached and output tokens. Estimates from the usage counts. |
-| 69 | Connection diagnostics | Partial | Test connection exists. Split errors into endpoint, key, deployment, quota and network. |
-| 70 | Privacy monitor | New | Lists what was sent to Azure for each request: text, screenshots, counts. |
-| 67 | Context optimization | Partial | Caching, compaction and screenshot limits are in. Add a visible summary per request. |
-| 68 | Response speed settings | Partial | Reasoning effort exists in settings. Add a plain "Fast / Balanced / Thorough" choice. |
+| 1 | Smart permission setup | Partial | First missing permission shown as the next step. No walkthrough per permission. |
+| 2 | Capability dashboard | Done | Capabilities screen lists what works and what doesn't, each linked to its fix. |
+| 3 | Live task timeline | Partial | Live steps on the Activity tab, not a separate timeline screen. |
+| 4 | Pause / resume | Done | Pause between steps; resume continues from the same point. |
+| 5 | Undo last action | Partial | Typed text and flashlight only. Taps and sent messages can't be undone. |
+| 6 | Action preview | Partial | Full text shown for sent messages. Taps show the label only. |
+| 9 | Global emergency stop | Done | Stop button, long-press, notification action, and the Stop chip. |
+| 10 | Smart error recovery | Partial | Re-reads the screen when an element has moved. No other recovery. |
+| 29 | Self-verification | Partial | Unchanged screens are flagged on the step. No deeper check of the result. |
+| 52 | Private sessions | Done | Private session: nothing written to history, tasks or memory. |
+| 62 | Token usage dashboard | Done | Token dashboard on the Activity tab: task, all time, input, output, cache, speed. |
+| 63 | API cost estimation | Done | Estimated cost with editable prices on the Activity tab. |
+| 69 | Connection diagnostics | Done | Test connection names the failing part: key, deployment, endpoint, quota, network. |
+| 70 | Privacy monitor | Partial | Last 10 requests with time, message count, screenshot count, tokens. Not per field. |
+| 67 | Context optimization | Partial | Caching, compaction and smaller screenshots. No per-request controls. |
+| 68 | Response speed settings | Done | Fast, Balanced, Thorough and Deep reasoning levels. |
 
 ## Phase 2: Core experience (new information architecture and the orb)
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 11 | Living orb animation | Partial | States exist. Add idle breathing and state-specific motion. |
-| 12 | Emotional states | New | Idle, happy, confused, thinking, error faces. Cosmetic; uses existing states. |
-| 13 | Edge docking | Partial | Snap to the nearest edge exists. Make it a setting with a clear dock state. |
-| 14 | Compact mode | New | Shrink the orb to a small dot; tap to expand. |
-| 15 | Quick action ring | New | Long-press reveals 4–6 pinned actions in a ring. |
-| 16 | Dynamic orb size and transparency | New | Two sliders in settings. |
+| 11 | Living orb animation | Done | Slow idle breathing; expressions for happy, confused and error. |
+| 12 | Emotional states | Done | Happy after a clean task, confused after a failed step, frown on error. |
+| 13 | Edge docking | Done | Docks to the nearest edge; can be turned off. |
+| 14 | Compact mode | Done | Compact dot in Settings → Orb. |
+| 15 | Quick action ring | Done | Long-press opens quick actions: talk, screen question, undo, stop, suggestions. |
+| 16 | Dynamic orb size and transparency | Done | Size and opacity sliders in Settings → Orb. |
 | 17 | Visual task feedback | Exists | Focus ring, taps, typing indicator, scan sweep, status pill. |
 | 18 | Adaptive positioning | Partial | Moves above the keyboard. Avoiding other on-screen controls is not built. |
-| 8 | Conversation continuity | Done | Older messages are summarized once and included in later requests. Private sessions are skipped. |
-| 33 | Proactive suggestions | Partial | One tip per app per session when the app has suggestions. Nothing runs by itself. |
-| 73 | Contextual overlay | New | Shows suggested actions for the current screen; never executes them automatically. |
+| 8 | Conversation continuity | Done | Older messages summarized once; included in later requests. |
+| 33 | Proactive suggestions | Partial | One tip per app per session. No suggestions while a task runs. |
+| 73 | Contextual overlay | Done | Suggestions in the quick row; run only when tapped. |
 
 ## Phase 3: Voice (after Phase 2)
 
@@ -82,15 +82,15 @@ Safety, visibility and reliability come first. Every later feature depends on th
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 35 | Visual UI understanding | Partial | Screenshots go to the vision deployment. Add the text layout described in the design notes. |
-| 38 | Ask about screen | Partial | Possible through take_screenshot. Add a button on Home. |
-| 39 | Screen translation | New | Model translates visible text on request. |
-| 40 | Screenshot memory | New | Saves selected screenshots locally with a note. |
-| 41 | Visual element selection | New | Drag a rectangle over the screen and ask about it. |
-| 42 | Form assistance | New | Reads fields and fills them with confirmation for each sensitive field. |
-| 43 | Error detection | New | Model reads visible error text and suggests a fix. |
-| 44 | Screen comparison | New | Compares two saved screenshots. |
-| 45 | Notification understanding | Partial | Reading and replying work. Add summaries and reply suggestions. |
+| 35 | Visual UI understanding | Partial | Numbered boxes on tappable elements and the text layout. Understanding of charts and icons depends on the model. |
+| 38 | Ask about screen | Done | Quick action 'What's on screen?'. |
+| 39 | Screen translation | Partial | Quick action 'Translate screen' into English. Choosing another language is not built. |
+| 40 | Screenshot memory | Not started | Saving selected screenshots with a note is not built. |
+| 41 | Visual element selection | Not started | Drawing a rectangle over the screen to ask about it is not built. |
+| 42 | Form assistance | Not started | Form assistance (fields and confirmations) is not built. Typing into fields works. |
+| 43 | Error detection | Partial | Quick action 'Explain this error'. No dedicated error database. |
+| 44 | Screen comparison | Not started | Screen comparison is not built. |
+| 45 | Notification understanding | Partial | Quick action 'Summarize notifications' when access is on. Reply suggestions not built. |
 
 ## Phase 6: Device intelligence
 
@@ -130,38 +130,58 @@ Safety, visibility and reliability come first. Every later feature depends on th
 3. Model switching (64): drop it, or keep it for choosing the vision deployment only?
 4. Offline command mode: when Azure is unreachable, NYRO still answers device questions and opens apps. Keep it? It is local behavior, not a model fallback.
 
-## Open items after Phase 3
+## Consolidated open items (all phases)
 
-These items were started but are not complete. Each one is listed by roadmap number.
+Everything not marked Done is listed here. Statuses come from the phase tables above.
 
-| # | Feature | Where it stands |
-|---|---|---|
-| 1 | Guided permissions | First missing step is shown. No step-by-step animation or per-step explanation. |
-| 3 | Live task timeline | Shown on the Activity tab, not as a separate screen. |
-| 5 | Undo | Only typed text and the flashlight. Taps and sent messages can't be undone. |
-| 6 | Action preview | Only sent text shows the full text. Taps show the label only. |
-| 10 | Error recovery | Re-reads the screen only when an element has moved. |
-| 18 | Adaptive positioning | Keyboard only. Avoiding other on-screen controls is not built. |
-| 20 | Barge-in | Tap to interrupt. Voice interruption is blocked by echo on phone speakers. |
-| 22 | Wake word | Blocked on a decision: Porcupine or Vosk. |
-| 24 | Follow-ups | Choosing from a list ("the second one") is not built. |
-| 26 | Multilingual | Recognition for Hindi and Telugu depends on the phone's speech models. |
-| 33 | Proactive suggestions | One tip per app. No suggestions while a task runs. |
+| # | Feature | Status | Where it stands |
+|---|---|---|---|
+| 1 | Smart permission setup | Partial | First missing permission shown as the next step. No walkthrough per permission. |
+| 3 | Live task timeline | Partial | Live steps on the Activity tab, not a separate timeline screen. |
+| 5 | Undo last action | Partial | Typed text and flashlight only. Taps and sent messages can't be undone. |
+| 6 | Action preview | Partial | Full text shown for sent messages. Taps show the label only. |
+| 10 | Smart error recovery | Partial | Re-reads the screen when an element has moved. No other recovery. |
+| 18 | Adaptive positioning | Partial | Moves above the keyboard. Avoiding other on-screen controls is not built. |
+| 19 | Natural voice conversation | Partial | Tap-to-talk and continuous listening. Voice barge-in is not built. |
+| 20 | Voice interruption (barge-in) | Partial | Tap the orb to interrupt speech. Interrupting by voice is blocked (echo on phone speakers). |
+| 22 | Wake word ("Hey NYRO") | Blocked | Needs your decision: Porcupine (licensed) or Vosk (offline, free). |
+| 24 | Contextual follow-ups ("do that again", "cancel it") | Partial | "Do that again" and "cancel it" use the last action. Picking "the second one" from a list is not built. |
+| 26 | Multilingual conversation | Partial | Replies follow the user's language. Recognition for Hindi and Telugu depends on the phone's speech models. |
+| 28 | Multi-step planning | Partial | The model plans step by step. Add a visible plan in the timeline. |
+| 29 | Self-verification | Partial | Unchanged screens are flagged on the step. No deeper check of the result. |
+| 30 | Adaptive automation | Partial | Re-reads the screen when a step fails. |
+| 31 | App-specific skills | Partial | WhatsApp: send a message by contact name, with checks. Other apps not built yet. |
+| 32 | Task memory (unfinished tasks) | Not started | Task memory for unfinished tasks not built. |
+| 33 | Proactive suggestions | Partial | One tip per app per session. No suggestions while a task runs. |
+| 35 | Visual UI understanding | Partial | Numbered boxes on tappable elements and the text layout. Understanding of charts and icons depends on the model. |
+| 37 | Task scheduling | Partial | WorkManager schedules approved tasks; exact times need the exact-alarm permission. |
+| 39 | Screen translation | Partial | Quick action 'Translate screen' into English. Choosing another language is not built. |
+| 40 | Screenshot memory | Not started | Saving selected screenshots with a note is not built. |
+| 41 | Visual element selection | Not started | Drawing a rectangle over the screen to ask about it is not built. |
+| 42 | Form assistance | Not started | Form assistance (fields and confirmations) is not built. Typing into fields works. |
+| 43 | Error detection | Partial | Quick action 'Explain this error'. No dedicated error database. |
+| 44 | Screen comparison | Not started | Screen comparison is not built. |
+| 45 | Notification understanding | Partial | Quick action 'Summarize notifications' when access is on. Reply suggestions not built. |
+| 47 | Memory suggestions | New | Suggested memories are saved only after you approve. |
+| 48 | Memory search | Partial | Keyword search exists. Add search across conversations. |
+| 49 | Custom personality | Partial | Standing instructions set the style. Separate personality presets not built. |
+| 50 | Favorite applications | Not started | Favorite apps not built. |
+| 53 | Memory import and export | New | JSON file, chosen by the user. |
+| 54 | Live device monitoring | Partial | Device screen updates every 3 s. Add thermal and history. |
+| 55 | Battery intelligence | New | Rule-based suggestions from battery stats. |
+| 56 | App usage insights | Blocked | Needs the Usage Access special permission from the user. |
+| 57 | Connectivity assistant | Partial | Opens settings. Add status checks and step-by-step guidance. |
+| 59 | Storage assistant | New | Finds large files. Deleting is High risk and always asks. |
+| 60 | Performance assistant | New | Rule-based checks for RAM and thermal state. |
+| 61 | Device troubleshooter | New | Checks permissions, network and app state, then explains results. |
+| 64 | Model switching | Blocked | Conflicts with the single-model decision. **Decision needed.** |
+| 67 | Context optimization | Partial | Caching, compaction and smaller screenshots. No per-request controls. |
+| 70 | Privacy monitor | Partial | Last 10 requests with time, message count, screenshot count, tokens. Not per field. |
+| 71 | Contextual intelligence | Partial | Foreground app and recent conversation are included. |
+| 72 | Cross-app workflows | Partial | Possible through the tools; skills (31) make it reliable. |
+| 74 | Personal knowledge graph | New | Links people, projects, preferences and tasks. Large; starts after the memory search work. |
+| 75 | Personal device agent | Blocked | Learning routines needs weeks of history and clear consent. Later. |
 
-Later phases (4 to 8) are not started. The Phase 4 items include app skills (#31), personal commands (#36), and task memory (#32).
+Blocked on a decision: #22 wake word (Porcupine or Vosk), #64 model switching (single model), #56 usage insights (needs the Usage Access permission from the user), #75 device agent (needs a design for history and consent).
 
-## Open items after Phase 4
-
-| # | Feature | Where it stands |
-|---|---|---|
-| 28 | Multi-step planning | The model plans step by step. No visible plan yet. |
-| 30 | Adaptive automation | Re-reads the screen when an element moved. Not a general adaptation. |
-| 32 | Task memory | Not built. |
-| 50 | Favorite apps | Not built. |
-| 31 | App skills | WhatsApp send only. Other apps are not built. |
-| 49 | Custom personality | Instructions only. No presets. |
-| 71, 72 | Context and cross-app | Partial. Depends on the skills above. |
-| 74 | Knowledge graph | Not started (later phase). |
-| 75 | Device agent | Blocked. Needs history and consent design. |
-
-Bug fixes in this phase: the model no longer asks in text whether to go ahead with an action; the approval card also shows on the Activity tab; every step that acts on the screen sends one compressed screenshot with numbered boxes; repeated taps that don't change the screen are stopped after three attempts.
+Removed: #66 automatic model fallback.
