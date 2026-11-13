@@ -96,15 +96,15 @@ Safety, visibility and reliability come first. Every later feature depends on th
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 54 | Live device monitoring | Partial | Device screen updates every 3 s. Add thermal and history. |
-| 55 | Battery intelligence | New | Rule-based suggestions from battery stats. |
-| 56 | App usage insights | Blocked | Needs the Usage Access special permission from the user. |
-| 57 | Connectivity assistant | Partial | Opens settings. Add status checks and step-by-step guidance. |
+| 54 | Live device monitoring | Done | Device screen updates every 3 s. Health check adds thermal state and warnings. |
+| 55 | Battery intelligence | Partial | Rule-based findings on battery and temperature. No usage history yet. |
+| 56 | App usage insights | Blocked | Needs the Usage Access permission, granted by you in system settings. Not built. |
+| 57 | Connectivity assistant | Partial | Network and permission checks with guidance. Toggling Wi-Fi or Bluetooth is not possible without root. |
 | 58 | Sensor intelligence | Exists | Device screen reads sensors. |
-| 59 | Storage assistant | New | Finds large files. Deleting is High risk and always asks. |
-| 60 | Performance assistant | New | Rule-based checks for RAM and thermal state. |
-| 61 | Device troubleshooter | New | Checks permissions, network and app state, then explains results. |
-| 37 | Task scheduling | Partial | WorkManager schedules approved tasks; exact times need the exact-alarm permission. |
+| 59 | Storage assistant | Partial | find_large_files lists big media files. Deleting is not built; it needs its own high-risk confirmation. |
+| 60 | Performance assistant | Partial | Rule-based memory and thermal checks. No per-app culprit. |
+| 61 | Device troubleshooter | Partial | Permission, network and storage checks. App-specific diagnosis not built. |
+| 37 | Task scheduling | Not started | Scheduling needs a design: WorkManager (approximate) or exact alarms (permission). |
 
 ## Phase 7: Personal memory
 
@@ -132,7 +132,7 @@ Safety, visibility and reliability come first. Every later feature depends on th
 
 ## Consolidated open items (all phases)
 
-Everything not marked Done is listed here. Statuses come from the phase tables above.
+Everything not marked Done or Exists is listed here.
 
 | # | Feature | Status | Where it stands |
 |---|---|---|---|
@@ -154,7 +154,7 @@ Everything not marked Done is listed here. Statuses come from the phase tables a
 | 32 | Task memory (unfinished tasks) | Not started | Task memory for unfinished tasks not built. |
 | 33 | Proactive suggestions | Partial | One tip per app per session. No suggestions while a task runs. |
 | 35 | Visual UI understanding | Partial | Numbered boxes on tappable elements and the text layout. Understanding of charts and icons depends on the model. |
-| 37 | Task scheduling | Partial | WorkManager schedules approved tasks; exact times need the exact-alarm permission. |
+| 37 | Task scheduling | Not started | Scheduling needs a design: WorkManager (approximate) or exact alarms (permission). |
 | 39 | Screen translation | Partial | Quick action 'Translate screen' into English. Choosing another language is not built. |
 | 40 | Screenshot memory | Not started | Saving selected screenshots with a note is not built. |
 | 41 | Visual element selection | Not started | Drawing a rectangle over the screen to ask about it is not built. |
@@ -167,13 +167,12 @@ Everything not marked Done is listed here. Statuses come from the phase tables a
 | 49 | Custom personality | Partial | Standing instructions set the style. Separate personality presets not built. |
 | 50 | Favorite applications | Not started | Favorite apps not built. |
 | 53 | Memory import and export | New | JSON file, chosen by the user. |
-| 54 | Live device monitoring | Partial | Device screen updates every 3 s. Add thermal and history. |
-| 55 | Battery intelligence | New | Rule-based suggestions from battery stats. |
-| 56 | App usage insights | Blocked | Needs the Usage Access special permission from the user. |
-| 57 | Connectivity assistant | Partial | Opens settings. Add status checks and step-by-step guidance. |
-| 59 | Storage assistant | New | Finds large files. Deleting is High risk and always asks. |
-| 60 | Performance assistant | New | Rule-based checks for RAM and thermal state. |
-| 61 | Device troubleshooter | New | Checks permissions, network and app state, then explains results. |
+| 55 | Battery intelligence | Partial | Rule-based findings on battery and temperature. No usage history yet. |
+| 56 | App usage insights | Blocked | Needs the Usage Access permission, granted by you in system settings. Not built. |
+| 57 | Connectivity assistant | Partial | Network and permission checks with guidance. Toggling Wi-Fi or Bluetooth is not possible without root. |
+| 59 | Storage assistant | Partial | find_large_files lists big media files. Deleting is not built; it needs its own high-risk confirmation. |
+| 60 | Performance assistant | Partial | Rule-based memory and thermal checks. No per-app culprit. |
+| 61 | Device troubleshooter | Partial | Permission, network and storage checks. App-specific diagnosis not built. |
 | 64 | Model switching | Blocked | Conflicts with the single-model decision. **Decision needed.** |
 | 67 | Context optimization | Partial | Caching, compaction and smaller screenshots. No per-request controls. |
 | 70 | Privacy monitor | Partial | Last 10 requests with time, message count, screenshot count, tokens. Not per field. |
@@ -182,6 +181,6 @@ Everything not marked Done is listed here. Statuses come from the phase tables a
 | 74 | Personal knowledge graph | New | Links people, projects, preferences and tasks. Large; starts after the memory search work. |
 | 75 | Personal device agent | Blocked | Learning routines needs weeks of history and clear consent. Later. |
 
-Blocked on a decision: #22 wake word (Porcupine or Vosk), #64 model switching (single model), #56 usage insights (needs the Usage Access permission from the user), #75 device agent (needs a design for history and consent).
+Blocked on a decision: #22 wake word (Porcupine or Vosk), #64 model switching (single model), #56 usage insights (needs the Usage Access permission), #75 device agent (needs a design for history and consent).
 
 Removed: #66 automatic model fallback.
