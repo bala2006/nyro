@@ -1,28 +1,60 @@
 package com.nyro.companion.device
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import java.util.Locale
 
-/** Launchable apps visible through the manifest <queries> launcher filter (no QUERY_ALL_PACKAGES). */
+/**
+ * Launchable apps visible through the manifest <queries> launcher filter (no QUERY_ALL_PACKAGES).
+ *
+ * The list is read once (warmed in the background at startup) and rebuilt when Android reports a package added,
+ * removed or changed, instead of every minute. Lookups go through a pre-normalised [AppIndex].
+ */
 class AppCatalog(private val context: Context) {
-    data class App(val label: String, val pkg: String)
+    @Volatile private var index: AppIndex? = null
+    @Volatile private var builtAt = 0L
 
-    @Volatile private var cache: List<App> = emptyList()
-    @Volatile private var cachedAt = 0L
+    /** Bumped on every rebuild; lets callers notice that "the list of apps" changed. */
+    @Volatile var version: Int = 0
+        private set
 
-    fun all(): List<App> {
-        if (cache.isNotEmpty() && System.currentTimeMillis() - cachedAt < 60_000) return cache
-        val pm = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        cache = pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
-            .map { App(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
-            .distinctBy { it.pkg }
-            .sortedBy { it.label.lowercase(Locale.ROOT) }
-        cachedAt = System.currentTimeMillis()
-        return cache
+    init {
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_PACKAGE_ADDED); addAction(Intent.ACTION_PACKAGE_REMOVED)
+            addAction(Intent.ACTION_PACKAGE_CHANGED); addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        runCatching {
+            ContextCompat.registerReceiver(context, object : BroadcastReceiver() {
+                override fun onReceive(c: Context?, i: Intent?) { index = null }
+            }, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+        }
     }
+
+    /** Builds the index now if it is missing. Safe to call from a background thread. */
+    fun warmUp() { index() }
+
+    private fun index(): AppIndex {
+        val cur = index
+        // Safety net in case a package broadcast was missed.
+        if (cur != null && System.currentTimeMillis() - builtAt < SAFETY_REFRESH_MS) return cur
+        synchronized(this) {
+            index?.takeIf { System.currentTimeMillis() - builtAt < SAFETY_REFRESH_MS }?.let { return it }
+            val pm = context.packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val apps = pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+                .map { AppInfo(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
+                .distinctBy { it.pkg }
+                .sortedBy { it.label.lowercase(Locale.ROOT) }
+            return AppIndex(apps).also { index = it; builtAt = System.currentTimeMillis(); version++ }
+        }
+    }
+
+    fun all(): List<AppInfo> = index().apps
 
     fun label(pkg: String): String {
         if (pkg.isEmpty()) return ""
@@ -31,25 +63,13 @@ class AppCatalog(private val context: Context) {
         return runCatching { pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
     }
 
-    /** Best match for a spoken/typed app name, or null. Exact > prefix > word > contains > package. */
-    fun find(query: String): App? {
-        val q = normalize(query)
-        if (q.isEmpty()) return null
-        val apps = all()
-        apps.firstOrNull { it.pkg.equals(query.trim(), true) }?.let { return it }
-        return apps.firstOrNull { normalize(it.label) == q }
-            ?: apps.firstOrNull { normalize(it.label).startsWith(q) }
-            ?: apps.firstOrNull { normalize(it.label).split(' ').any { w -> w == q } }
-            ?: apps.firstOrNull { normalize(it.label).contains(q) }
-            ?: apps.firstOrNull { it.pkg.lowercase(Locale.ROOT).contains(q.replace(" ", "")) }
-            ?: apps.minByOrNull { levenshtein(normalize(it.label), q) }?.takeIf { levenshtein(normalize(it.label), q) <= maxOf(1, q.length / 4) }
-    }
+    /** Strict resolution used by the deterministic router. */
+    fun resolve(query: String): AppMatch = index().resolve(query, loose = false)
 
-    fun search(query: String): List<App> {
-        val q = normalize(query)
-        if (q.isEmpty()) return all()
-        return all().filter { normalize(it.label).contains(q) || it.pkg.contains(q.replace(" ", ""), true) }
-    }
+    /** Best match for a spoken/typed app name for the model-facing tools (loose, never throws). */
+    fun find(query: String): AppInfo? = index().find(query)
+
+    fun search(query: String): List<AppInfo> = index().search(query)
 
     fun launch(pkg: String): Boolean {
         val i = context.packageManager.getLaunchIntentForPackage(pkg) ?: return false
@@ -57,18 +77,5 @@ class AppCatalog(private val context: Context) {
         return runCatching { context.startActivity(i); true }.getOrDefault(false)
     }
 
-    private fun normalize(s: String) = s.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9 ]"), " ").replace(Regex("\\s+"), " ").trim()
-
-    private fun levenshtein(a: String, b: String): Int {
-        val dp = IntArray(b.length + 1) { it }
-        for (i in 1..a.length) {
-            var prev = dp[0]; dp[0] = i
-            for (j in 1..b.length) {
-                val tmp = dp[j]
-                dp[j] = minOf(dp[j] + 1, dp[j - 1] + 1, prev + if (a[i - 1] == b[j - 1]) 0 else 1)
-                prev = tmp
-            }
-        }
-        return dp[b.length]
-    }
+    companion object { private const val SAFETY_REFRESH_MS = 10 * 60_000L }
 }

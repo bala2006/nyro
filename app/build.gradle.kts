@@ -43,6 +43,10 @@ android {
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }
+    testOptions {
+        // JVM unit tests touch a few android.* constants; return defaults instead of throwing.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 ksp {
@@ -72,4 +76,6 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

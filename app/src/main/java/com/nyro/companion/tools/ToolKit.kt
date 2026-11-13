@@ -9,6 +9,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.put
+import com.nyro.companion.exec.ScreenChange
 
 enum class Risk { LOW, MEDIUM, HIGH }
 
@@ -27,6 +28,10 @@ data class ToolResult(
     val imageJpeg: String? = null,
     /** Reverses this action. Only set for actions that can be safely reversed (typed text, flashlight). */
     val undo: (suspend () -> Unit)? = null,
+    /** How the screen differs from before the action, when the tool observed it. Null for tools that do not observe. */
+    val change: ScreenChange? = null,
+    /** Snapshot taken right after the action settled; used by the plan executor and loop detector. */
+    val obs: com.nyro.companion.exec.Obs? = null,
 ) {
     companion object {
         fun fail(msg: String) = ToolResult("FAILED: $msg", ok = false)
@@ -36,7 +41,15 @@ data class ToolResult(
 /** A risk assessment for a specific invocation; [reason] is shown to the user in the confirmation prompt. */
 data class RiskAssessment(val risk: Risk, val reason: String)
 
-class Param(val name: String, val type: String, val description: String, val required: Boolean, val enumValues: List<String>? = null)
+class Param(
+    val name: String,
+    val type: String,
+    val description: String,
+    val required: Boolean,
+    val enumValues: List<String>? = null,
+    /** Full JSON schema for array/object parameters. */
+    val schema: JsonObject? = null,
+)
 
 class ParamsBuilder {
     val list = mutableListOf<Param>()
@@ -45,6 +58,8 @@ class ParamsBuilder {
     fun number(n: String, d: String, required: Boolean = true) { list += Param(n, "number", d, required) }
     fun bool(n: String, d: String, required: Boolean = false) { list += Param(n, "boolean", d, required) }
     fun enum(n: String, d: String, values: List<String>, required: Boolean = true) { list += Param(n, "string", d, required, values) }
+    /** Array or object parameter described by a complete JSON schema. */
+    fun json(n: String, type: String, d: String, schema: JsonObject, required: Boolean = true) { list += Param(n, type, d, required, schema = schema) }
 }
 
 abstract class Tool(
@@ -54,6 +69,11 @@ abstract class Tool(
     val requires: Set<Requirement> = emptySet(),
     /** True for tools that act on or read the foreground UI (overlay panel gets collapsed first). */
     val touchesScreen: Boolean = false,
+    /**
+     * True for tools that only read state and change nothing. Several read-only calls may share one model turn; a call
+     * that changes the UI ends the batch for other UI-changing calls, because their targets may no longer exist.
+     */
+    val readOnly: Boolean = false,
     params: ParamsBuilder.() -> Unit = {},
 ) {
     val params: List<Param> = ParamsBuilder().apply(params).list
@@ -75,7 +95,7 @@ abstract class Tool(
                 put("type", "object")
                 put("properties", buildJsonObject {
                     params.forEach { p ->
-                        put(p.name, buildJsonObject {
+                        put(p.name, p.schema?.let { sc -> JsonObject(sc + ("description" to JsonPrimitive(p.description))) } ?: buildJsonObject {
                             put("type", p.type); put("description", p.description)
                             p.enumValues?.let { ev -> put("enum", buildJsonArray { ev.forEach { add(JsonPrimitive(it)) } }) }
                         })
@@ -94,6 +114,8 @@ abstract class Tool(
                 if (p.required) return "Missing required argument '${p.name}'."
                 continue
             }
+            if (p.type == "array") { if (v !is JsonArray) return "Argument '${p.name}' must be an array."; continue }
+            if (p.type == "object") { if (v !is JsonObject) return "Argument '${p.name}' must be an object."; continue }
             val prim = v as? JsonPrimitive ?: return "Argument '${p.name}' must be a ${p.type}."
             when (p.type) {
                 "integer", "number" -> if (prim.doubleOrNull == null) return "Argument '${p.name}' must be a number."

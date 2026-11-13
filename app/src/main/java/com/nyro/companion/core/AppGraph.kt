@@ -15,6 +15,7 @@ import com.nyro.companion.data.SettingsRepository
 import com.nyro.companion.device.AppCatalog
 import com.nyro.companion.device.DeviceInfo
 import com.nyro.companion.overlay.NyroModeService
+import com.nyro.companion.perf.Perf
 import com.nyro.companion.tools.ToolRegistry
 import com.nyro.companion.voice.VoiceEngine
 import kotlinx.coroutines.CoroutineScope
@@ -47,6 +48,8 @@ class AppGraph(val app: Application) {
 
     init {
         scope.launch(Dispatchers.IO) { dao.markOrphanedTasks() }
+        // Off the main thread: restore saved latency samples and build the app index so the first request does not pay for it.
+        scope.launch(Dispatchers.IO) { Perf.attach(app); apps.warmUp() }
     }
 }
 

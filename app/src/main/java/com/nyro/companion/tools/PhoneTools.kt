@@ -17,11 +17,15 @@ import androidx.core.content.ContextCompat
 import com.nyro.companion.NyroApp
 import com.nyro.companion.access.NyroAccessibilityService
 import com.nyro.companion.access.NyroNotificationListener
+import com.nyro.companion.access.ScreenReader
 import com.nyro.companion.data.MemoryEntity
 import com.nyro.companion.data.Redactor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import com.nyro.companion.perf.Metric
+import com.nyro.companion.perf.Perf
+import com.nyro.companion.perf.RealClock
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -29,44 +33,62 @@ import java.util.Locale
 private val ctx get() = NyroApp.graph.context
 private val g get() = NyroApp.graph
 
-private fun startIntent(i: Intent): Boolean = runCatching {
-    ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true
-}.getOrDefault(false)
+/** Accessibility event counter at the moment of the last launch, so verification only accepts events that came after it. */
+@Volatile private var launchedSince = 0L
 
-/** After launching something, confirm through accessibility that the expected app is in front. */
-private suspend fun verifyForeground(expectPkg: String?, timeoutMs: Long = 4500): String {
+private fun startIntent(i: Intent): Boolean {
+    launchedSince = NyroAccessibilityService.current?.gate?.version ?: 0L
+    return runCatching { ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); true }.getOrDefault(false)
+}
+
+/** Per-task memory for tools: reset when a task starts. */
+object TaskMemo {
+    @Volatile var lastAppListKey: String? = null
+    fun reset() { lastAppListKey = null }
+}
+
+/**
+ * After launching something, confirm that the expected app is in front. Event-driven: the service already tracks the
+ * foreground package from window events, so no tree walk is needed to verify. Then wait for the first screen to settle
+ * (bounded) and, unless [brief], read it once.
+ */
+private suspend fun verifyForeground(expectPkg: String?, timeoutMs: Long = 4500, brief: Boolean = false, since: Long = launchedSince): String {
     val svc = NyroAccessibilityService.current ?: return "Launch intent sent (cannot verify: accessibility is off)."
-    val start = System.currentTimeMillis()
-    while (System.currentTimeMillis() - start < timeoutMs) {
-        delay(250)
-        val snap = ScreenSession.read(svc)
-        if (expectPkg == null || snap.packageName == expectPkg) {
-            svc.waitForIdle(quietMs = 300, timeoutMs = 2000)
-            return "Verified: now showing ${g.apps.label(ScreenSession.read(svc).packageName)}.\n" + ScreenSession.last!!.render(80)
+    val front = if (expectPkg == null) {
+        // We do not know which package to expect (settings, a URL, a share sheet): any window change after the launch counts.
+        svc.gate.awaitChange(since, timeoutMs.coerceAtMost(2500))
+        true
+    } else Perf.time(Metric.VERIFY) {
+        svc.foregroundPackage == expectPkg || svc.gate.awaitCondition(timeoutMs, pollMs = 250) {
+            svc.foregroundPackage == expectPkg || ScreenReader.pickRoot(svc)?.packageName?.toString() == expectPkg
         }
     }
-    val now = ScreenSession.read(svc)
-    return "Not verified: foreground is still ${now.appLabel.ifBlank { now.packageName }}.\n" + now.render(50)
+    Perf.time(Metric.UI_WAIT) { svc.gate.awaitSettled(since, firstEventTimeoutMs = 300, quietMs = 150, maxMs = 1500) }
+    if (front && brief) return "Verified: ${g.apps.label(expectPkg ?: svc.foregroundPackage)} is in front."
+    val obs = ScreenSession.read(svc, ScreenReader.OBSERVE_BUDGET_MS).obs
+    val text = ScreenSession.renderOnce(obs, 60)
+    return if (front) "Verified: now showing ${g.apps.label(obs.packageName)}.\n$text"
+    else "Not verified: foreground is still ${obs.appLabel.ifBlank { obs.packageName }}.\n$text"
 }
 
 fun deviceTools(): List<Tool> = listOf(
-    object : Tool("get_device_info", "Device hardware/software: manufacturer, model, Android version, CPU, RAM, storage, display.") {
+    object : Tool("get_device_info", "Device hardware/software: manufacturer, model, Android version, CPU, RAM, storage, display.", readOnly = true) {
         override fun describe(args: Args) = "Reading device information"
         override suspend fun run(args: Args) = ToolResult(g.device.device().toString())
     },
-    object : Tool("get_battery", "Battery percent, charging state, temperature, voltage, health, power-save and thermal status.") {
+    object : Tool("get_battery", "Battery percent, charging state, temperature, voltage, health, power-save and thermal status.", readOnly = true) {
         override fun describe(args: Args) = "Reading battery"
         override suspend fun run(args: Args) = ToolResult(g.device.battery().toString())
     },
-    object : Tool("get_network_status", "Connectivity: transport, internet validation, Wi-Fi/Bluetooth enabled, metered, ringer mode.") {
+    object : Tool("get_network_status", "Connectivity: transport, internet validation, Wi-Fi/Bluetooth enabled, metered, ringer mode.", readOnly = true) {
         override fun describe(args: Args) = "Checking connectivity"
         override suspend fun run(args: Args) = ToolResult(g.device.network().toString())
     },
-    object : Tool("list_sensors", "List hardware sensors available on this phone.") {
+    object : Tool("list_sensors", "List hardware sensors available on this phone.", readOnly = true) {
         override fun describe(args: Args) = "Listing sensors"
         override suspend fun run(args: Args) = ToolResult(g.device.sensors().toString())
     },
-    object : Tool("read_sensor", "Take one live reading from a sensor.", params = {
+    object : Tool("read_sensor", "Take one live reading from a sensor.", readOnly = true, params = {
         enum("sensor", "Sensor", listOf("accelerometer", "gyroscope", "magnetic_field", "light", "proximity", "pressure", "gravity", "linear_acceleration", "rotation_vector", "ambient_temperature", "relative_humidity", "step_counter"))
     }) {
         override fun describe(args: Args) = "Reading ${args.str("sensor")} sensor"
@@ -118,6 +140,8 @@ fun deviceTools(): List<Tool> = listOf(
     },
 )
 
+private const val LIST_APPS_LIMIT = 40
+
 private val settingsPages = mapOf(
     "main" to Settings.ACTION_SETTINGS, "wifi" to Settings.ACTION_WIFI_SETTINGS, "bluetooth" to Settings.ACTION_BLUETOOTH_SETTINGS,
     "internet_panel" to Settings.Panel.ACTION_INTERNET_CONNECTIVITY, "volume_panel" to Settings.Panel.ACTION_VOLUME,
@@ -132,19 +156,39 @@ private val settingsPages = mapOf(
 )
 
 fun appTools(): List<Tool> = listOf(
-    object : Tool("list_apps", "List installed launchable apps, optionally filtered by name.", params = { string("query", "Filter text", required = false) }) {
+    object : Tool("list_apps", "List installed launchable apps, optionally filtered by name. Not needed before open_app, which finds apps by name itself.", readOnly = true, params = {
+        string("query", "Filter text", required = false)
+    }) {
         override fun describe(args: Args) = "Listing apps"
         override suspend fun run(args: Args): ToolResult {
-            val list = g.apps.search(args.str("query").orEmpty())
-            return ToolResult(if (list.isEmpty()) "No matching apps." else list.take(150).joinToString("\n") { "${it.label} (${it.pkg})" })
+            val query = args.str("query").orEmpty()
+            val key = query.lowercase() + "#" + g.apps.version
+            if (TaskMemo.lastAppListKey == key) return ToolResult("Same app list as your previous list_apps call (nothing changed). Use open_app with the name you want.")
+            TaskMemo.lastAppListKey = key
+            val list = g.apps.search(query)
+            if (list.isEmpty()) return ToolResult("No matching apps.")
+            val shown = list.take(LIST_APPS_LIMIT).joinToString("\n") { "${it.label} (${it.pkg})" }
+            return ToolResult(if (list.size > LIST_APPS_LIMIT) "$shown\n(${list.size - LIST_APPS_LIMIT} more; pass a query to narrow the list)" else shown)
         }
     },
-    object : Tool("open_app", "Open an installed app by name or package and verify it is in the foreground.", params = { string("name", "App name, e.g. 'YouTube', or package name") }) {
+    object : Tool("open_app", "Open an installed app by name or package and verify it is in the foreground. Finds the app by name, so call it directly. An app that is already in front is not relaunched. brief=true skips the screen listing.", params = {
+        string("name", "App name, e.g. 'YouTube', or package name")
+        bool("brief", "Only confirm the app is in front; do not list the screen")
+    }) {
         override fun describe(args: Args) = "Opening ${args.str("name")}"
         override suspend fun run(args: Args): ToolResult {
             val app = g.apps.find(args.str("name")!!) ?: return ToolResult.fail("No installed app matches \"${args.str("name")}\". Use list_apps to see options.")
+            val brief = args.bool("brief") == true
+            val svc = NyroAccessibilityService.current
+            // Two independent signals agree before the launch is skipped: the tracked foreground package and the live window.
+            if (svc != null && svc.foregroundPackage == app.pkg && ScreenReader.activePackage(svc) == app.pkg) {
+                if (brief) return ToolResult("${app.label} is already in front.")
+                val obs = ScreenSession.fresh(svc, 300).obs
+                return ToolResult("${app.label} is already in front (not relaunched).\n" + ScreenSession.renderOnce(obs, 60), obs = obs)
+            }
+            launchedSince = svc?.gate?.version ?: 0L
             if (!g.apps.launch(app.pkg)) return ToolResult.fail("${app.label} could not be launched.")
-            return ToolResult("Launched ${app.label} (${app.pkg}). " + verifyForeground(app.pkg))
+            return ToolResult("Launched ${app.label} (${app.pkg}). " + verifyForeground(app.pkg, brief = brief))
         }
     },
     object : Tool("open_settings", "Open a system settings screen. Apps cannot toggle Wi-Fi/Bluetooth/mobile data directly on modern Android; open the page or panel and tap the toggle.", params = {
@@ -236,7 +280,7 @@ fun memoryTools(): List<Tool> = listOf(
             return ToolResult("Saved memory #$id.")
         }
     },
-    object : Tool("recall", "Search local memories.", params = { string("query", "Keywords", required = false) }) {
+    object : Tool("recall", "Search local memories.", readOnly = true, params = { string("query", "Keywords", required = false) }) {
         override fun describe(args: Args) = "Searching memory"
         override suspend fun run(args: Args): ToolResult {
             val words = args.str("query")?.lowercase()?.split(Regex("\\W+"))?.filter { it.length > 2 }.orEmpty()
@@ -252,7 +296,7 @@ fun memoryTools(): List<Tool> = listOf(
 )
 
 fun fileTools(): List<Tool> = listOf(
-    object : Tool("search_files", "Search photos, videos, audio and downloads the user allowed NYRO to read. Returns name, type, size, date and a content uri.", requires = setOf(Requirement.MEDIA), params = {
+    object : Tool("search_files", "Search photos, videos, audio and downloads the user allowed NYRO to read. Returns name, type, size, date and a content uri.", readOnly = true, requires = setOf(Requirement.MEDIA), params = {
         string("query", "Part of the file name, or empty for most recent", required = false)
         enum("kind", "File kind", listOf("any", "image", "video", "audio"), required = false)
     }) {
@@ -302,7 +346,7 @@ fun fileTools(): List<Tool> = listOf(
 )
 
 fun notificationTools(): List<Tool> = listOf(
-    object : Tool("get_notifications", "Read current notifications (app, title, text, key). Requires notification access.", requires = setOf(Requirement.NOTIFICATIONS)) {
+    object : Tool("get_notifications", "Read current notifications (app, title, text, key). Requires notification access.", readOnly = true, requires = setOf(Requirement.NOTIFICATIONS)) {
         override fun describe(args: Args) = "Reading notifications"
         override suspend fun run(args: Args): ToolResult {
             val l = NyroNotificationListener.instance ?: return ToolResult.fail(Requirement.NOTIFICATIONS.label)
