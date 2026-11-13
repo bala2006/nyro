@@ -110,10 +110,10 @@ Safety, visibility and reliability come first. Every later feature depends on th
 
 | # | Feature | Status | Notes |
 |---|---|---|---|
-| 46 | Personal memory | Exists | Local memories. |
-| 47 | Memory suggestions | New | Suggested memories are saved only after you approve. |
-| 48 | Memory search | Partial | Keyword search exists. Add search across conversations. |
-| 53 | Memory import and export | New | JSON file, chosen by the user. |
+| 46 | Personal memory | Done | Local memories: add, delete, export and import. |
+| 47 | Memory suggestions | Partial | Suggestions from simple patterns in your messages (name, preferences, 'remember that'). Save only when you tap it. |
+| 48 | Memory search | Done | Searches memories and conversations. Keyword match, not semantic. |
+| 53 | Memory import and export | Done | JSON export and import. Sensitive or empty entries are skipped on import. |
 
 ## Phase 8: Advanced screen features
 
@@ -162,11 +162,9 @@ Everything not marked Done or Exists is listed here.
 | 43 | Error detection | Partial | Quick action 'Explain this error'. No dedicated error database. |
 | 44 | Screen comparison | Not started | Screen comparison is not built. |
 | 45 | Notification understanding | Partial | Quick action 'Summarize notifications' when access is on. Reply suggestions not built. |
-| 47 | Memory suggestions | New | Suggested memories are saved only after you approve. |
-| 48 | Memory search | Partial | Keyword search exists. Add search across conversations. |
+| 47 | Memory suggestions | Partial | Suggestions from simple patterns in your messages (name, preferences, 'remember that'). Save only when you tap it. |
 | 49 | Custom personality | Partial | Standing instructions set the style. Separate personality presets not built. |
 | 50 | Favorite applications | Not started | Favorite apps not built. |
-| 53 | Memory import and export | New | JSON file, chosen by the user. |
 | 55 | Battery intelligence | Partial | Rule-based findings on battery and temperature. No usage history yet. |
 | 56 | App usage insights | Blocked | Needs the Usage Access permission, granted by you in system settings. Not built. |
 | 57 | Connectivity assistant | Partial | Network and permission checks with guidance. Toggling Wi-Fi or Bluetooth is not possible without root. |
