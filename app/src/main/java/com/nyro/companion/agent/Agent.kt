@@ -15,6 +15,9 @@ import com.nyro.companion.overlay.UiFeedback
 import com.nyro.companion.tools.Risk
 import com.nyro.companion.tools.ScreenSession
 import com.nyro.companion.tools.Tool
+import com.nyro.companion.tools.annotate
+import com.nyro.companion.tools.captureScreen
+import com.nyro.companion.tools.encode
 import com.nyro.companion.tools.ToolResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -138,7 +141,7 @@ class Agent(private val g: AppGraph) {
     fun openConversation(id: Long) { stop(); _conversationId.value = id; _state.value = AssistantState() }
 
     fun submit(text: String, fromVoice: Boolean = false) {
-        val clean = text.trim()
+        val clean = expandCommand(text.trim())
         if (clean.isEmpty()) return
         job?.cancel()
         g.voice.stopSpeaking()
@@ -218,6 +221,8 @@ class Agent(private val g: AppGraph) {
         var stepNo = 0
         val tts = g.voice.streamingSpeaker(enabled = settings.speakReplies)
         var resumedNote = false
+        var lastBatchWasScreen = false
+        var noChangeStreak = 0
 
         try {
             for (iteration in 0 until MAX_ITERATIONS) {
@@ -236,6 +241,8 @@ class Agent(private val g: AppGraph) {
                     g.usage.onDelta(d)
                     tts.push(d)
                 }
+                // One compressed, numbered screenshot per step that acts on the screen.
+                if (lastBatchWasScreen) screenshotForStep()?.let { messages += it }
                 val modelStart = System.currentTimeMillis()
                 val turn = try {
                     g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta, cacheKey = promptCacheKey)
@@ -278,7 +285,13 @@ class Agent(private val g: AppGraph) {
                     val result = execute(call, ++stepNo, log)
                     log.append("  tool ${System.currentTimeMillis() - toolStart} ms\n")
                     messages += Msg.tool(call.id, result.text.take(MAX_TOOL_CHARS))
+                    if (result.text.contains("Screen changed: NO")) noChangeStreak++ else if (result.ok) noChangeStreak = 0
                     result.imageJpeg?.let { images += Msg.userWithImage("Screenshot for tool call ${call.id}.", it) }
+                }
+                lastBatchWasScreen = turn.toolCalls.any { c -> g.tools.get(c.name)?.let { it.touchesScreen || it.name == "open_app" } == true }
+                if (noChangeStreak >= 3) {
+                    messages += Msg.user("[NYRO stopped repeating actions that did not change the screen. Say what is blocking you and ask the user what to do.]")
+                    noChangeStreak = 0
                 }
                 messages.addAll(images)
             }
@@ -471,6 +484,25 @@ class Agent(private val g: AppGraph) {
         return turn.content.trim().take(1500)
     }
 
+    /** One compressed screenshot with numbered boxes on the elements of the latest screen result. */
+    private suspend fun screenshotForStep(): JsonObject? {
+        if (!g.settings.current.allowScreenshots) return null
+        if (NyroAccessibilityService.current == null) return null
+        val snap = ScreenSession.last ?: return null
+        val raw = captureScreen() ?: return null
+        val enc = encode(annotate(raw, snap), maxDim = 720, quality = 50)
+        ScreenSession.shotScale = enc.scale
+        return Msg.userWithImage("Current screen. Numbered boxes are the elements in the latest screen result. Act on a box by its number with tap_element.", enc.base64)
+    }
+
+    /** Personal commands: a typed shortcut that exactly matches a saved trigger is replaced by its instruction. */
+    private fun expandCommand(text: String): String {
+        val hit = g.settings.current.commands.lines().mapNotNull { line ->
+            line.split('\t', limit = 2).takeIf { it.size == 2 }
+        }.firstOrNull { it[0].trim().equals(text, ignoreCase = true) }
+        return hit?.get(1)?.trim()?.takeIf { it.isNotEmpty() } ?: text
+    }
+
     private fun flashMood(v: String) {
         _mood.value = v
         g.scope.launch { delay(3000); if (_mood.value == v) _mood.value = null }
@@ -536,6 +568,12 @@ class Agent(private val g: AppGraph) {
         messages.addAll(tail)
     }
 
+    /** The user's standing instructions, added to the static prefix (changes rarely, so the cache holds). */
+    private fun instructionsBlock(): String {
+        val t = g.settings.current.customInstructions.trim()
+        return if (t.isEmpty()) "" else "\n\nThe user's standing instructions (follow them unless they conflict with safety rules):\n$t"
+    }
+
     /** Phone state for the newest request only: changes every task, so it sits after the cached prefix. */
     private suspend fun stateBlock(): String {
         val memories = g.dao.memoryList(40)
@@ -570,6 +608,9 @@ How you work:
 - To search inside an app: tap its search control, type_text with submit=true, then confirm results appeared.
 - To send a message (WhatsApp, SMS, etc.): open the chat, type_text into the message box WITHOUT submit, then tap the Send button (usually desc "Send"). Done only when the message appears in the conversation and the box is empty.
 - The phone state block at the end of the user's message holds the current time, foreground app and memories. Use it; don't ask for it.
+- Never ask in text whether to go ahead with an action ("shall I go ahead?", "want me to continue?"). Call the tool instead. If an action needs approval, the phone shows an approval card by itself. Ask in text only for information you don't have.
+- Before tapping, find the target in the latest screenshot and its number in the element list, then tap by number with tap_element. Don't tap coordinates you estimated.
+- If an action doesn't change the screen, don't repeat it. Try another element, scroll, or go back.
 - Work fast: don't call read_screen right after an action; action results already include the new screen.
 - If a step fails, try a sensible alternative (scroll, go back, re-read, search) up to a few times, then explain what blocked you.
 - The phone's safety layer may ask the user to confirm risky actions; if a tool returns DENIED, stop that path and ask the user.
@@ -579,7 +620,7 @@ How you work:
 - Reply length: ${when (g.settings.current.responseLength) { "short" -> "one short sentence unless the user asks for more"; "detailed" -> "explain the key details clearly, up to a short paragraph"; else -> "1–3 short sentences" }}. No markdown, no lists unless asked. While working, a brief progress phrase before tool calls is fine (e.g. "Opening YouTube.").
 - Reply in the same language the user speaks or writes in (English, Hindi, Telugu or another language).
 - Follow-ups: "do that again", "cancel it" or "the second one" refer to the last action and the recent screen in the phone state block.
-""".trim()
+${instructionsBlock()}""".trim()
     }
 
     companion object {

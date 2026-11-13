@@ -65,13 +65,13 @@ Safety, visibility and reliability come first. Every later feature depends on th
 |---|---|---|---|
 | 28 | Multi-step planning | Partial | The model plans step by step. Add a visible plan in the timeline. |
 | 30 | Adaptive automation | Partial | Re-reads the screen when a step fails. |
-| 31 | App-specific skills | New | Start with WhatsApp (send message), Settings (toggles), YouTube (search), Chrome (open URL), Gmail (compose). Each skill is code with verification, not model guesses. |
-| 32 | Task memory (unfinished tasks) | New | Saves paused and failed tasks with their step log. |
+| 31 | App-specific skills | Partial | WhatsApp: send a message by contact name, with checks. Other apps not built yet. |
+| 32 | Task memory (unfinished tasks) | Not started | Task memory for unfinished tasks not built. |
 | 34 | Multi-tool reasoning | Exists | The agent combines device, screen and app tools. |
-| 36 | Personal commands | New | Saved phrases that expand into instructions. |
-| 49 | Custom personality | New | Editable style text in the system instructions. |
-| 51 | Custom instructions | New | Persistent instructions added to the static prefix. Changing them invalidates the cache once. |
-| 50 | Favorite applications | New | Counts app launches locally; shown on Home. |
+| 36 | Personal commands | Done | Typed shortcuts in Settings expand to their instruction. Voice shortcuts not built. |
+| 49 | Custom personality | Partial | Standing instructions set the style. Separate personality presets not built. |
+| 51 | Custom instructions | Done | Standing instructions are added to every request. |
+| 50 | Favorite applications | Not started | Favorite apps not built. |
 | 71 | Contextual intelligence | Partial | Foreground app and recent conversation are included. |
 | 72 | Cross-app workflows | Partial | Possible through the tools; skills (31) make it reliable. |
 | 7 | Context awareness | Exists | Foreground app and screen are included. |
@@ -149,3 +149,19 @@ These items were started but are not complete. Each one is listed by roadmap num
 | 33 | Proactive suggestions | One tip per app. No suggestions while a task runs. |
 
 Later phases (4 to 8) are not started. The Phase 4 items include app skills (#31), personal commands (#36), and task memory (#32).
+
+## Open items after Phase 4
+
+| # | Feature | Where it stands |
+|---|---|---|
+| 28 | Multi-step planning | The model plans step by step. No visible plan yet. |
+| 30 | Adaptive automation | Re-reads the screen when an element moved. Not a general adaptation. |
+| 32 | Task memory | Not built. |
+| 50 | Favorite apps | Not built. |
+| 31 | App skills | WhatsApp send only. Other apps are not built. |
+| 49 | Custom personality | Instructions only. No presets. |
+| 71, 72 | Context and cross-app | Partial. Depends on the skills above. |
+| 74 | Knowledge graph | Not started (later phase). |
+| 75 | Device agent | Blocked. Needs history and consent design. |
+
+Bug fixes in this phase: the model no longer asks in text whether to go ahead with an action; the approval card also shows on the Activity tab; every step that acts on the screen sends one compressed screenshot with numbered boxes; repeated taps that don't change the screen are stopped after three attempts.

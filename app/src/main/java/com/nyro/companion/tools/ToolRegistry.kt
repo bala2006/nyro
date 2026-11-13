@@ -8,7 +8,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 
 class ToolRegistry {
-    val tools: Map<String, Tool> = (screenTools() + deviceTools() + appTools() + memoryTools() + fileTools() + notificationTools() + undoTools())
+    val tools: Map<String, Tool> = (screenTools() + deviceTools() + appTools() + memoryTools() + fileTools() + notificationTools() + undoTools() + skillTools())
         .associateBy { it.name }
 
     val schemas: JsonArray by lazy { toolsJson(tools.values) }
