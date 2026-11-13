@@ -86,6 +86,12 @@ interface NyroDao {
     // Memories
     @Insert suspend fun insertMemory(m: MemoryEntity): Long
     @Query("SELECT * FROM memories ORDER BY createdAt DESC") fun memories(): Flow<List<MemoryEntity>>
+    @Query("SELECT * FROM memories WHERE content LIKE '%' || :q || '%' ORDER BY createdAt DESC LIMIT 50")
+    suspend fun searchMemories(q: String): List<MemoryEntity>
+    @Query("SELECT * FROM messages WHERE content LIKE '%' || :q || '%' ORDER BY id DESC LIMIT 50")
+    suspend fun searchMessages(q: String): List<MessageEntity>
+    @Query("SELECT * FROM messages WHERE role = 'user' ORDER BY id DESC LIMIT :limit")
+    suspend fun recentUserMessages(limit: Int): List<MessageEntity>
     @Query("SELECT * FROM memories ORDER BY createdAt DESC LIMIT :limit") suspend fun memoryList(limit: Int): List<MemoryEntity>
     @Query("DELETE FROM memories WHERE id = :id") suspend fun deleteMemory(id: Long): Int
     @Query("DELETE FROM memories") suspend fun clearMemories()
