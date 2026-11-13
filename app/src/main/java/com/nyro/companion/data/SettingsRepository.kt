@@ -86,6 +86,10 @@ data class NyroSettings(
     val responseLength: String = "natural",
     /** Voice style preset: calm, friendly or brisk (sets speech rate and pitch). */
     val voiceStyle: String = "friendly",
+    /** Standing instructions for NYRO (free text). */
+    val customInstructions: String = "",
+    /** Personal commands, one per line: trigger, a tab, then the instruction it expands to. */
+    val commands: String = "",
     val orbX: Int = -1,
     val orbY: Int = 400,
     val lastConnectionStatus: String = "",
@@ -123,6 +127,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         val dockEdges = booleanPreferencesKey("dock_edges")
         val responseLength = stringPreferencesKey("response_length")
         val voiceStyle = stringPreferencesKey("voice_style")
+        val customInstructions = stringPreferencesKey("custom_instructions")
+        val commands = stringPreferencesKey("personal_commands")
         val orbX = intPreferencesKey("orb_x")
         val orbY = intPreferencesKey("orb_y")
         val lastStatus = stringPreferencesKey("last_status")
@@ -166,6 +172,8 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
         dockEdges = this[K.dockEdges] ?: true,
         responseLength = this[K.responseLength] ?: "natural",
         voiceStyle = this[K.voiceStyle] ?: "friendly",
+        customInstructions = this[K.customInstructions] ?: "",
+        commands = this[K.commands] ?: "",
         orbX = this[K.orbX] ?: -1,
         orbY = this[K.orbY] ?: 400,
         lastConnectionStatus = this[K.lastStatus] ?: "",
@@ -194,6 +202,10 @@ class SettingsRepository(private val context: Context, scope: CoroutineScope) {
     suspend fun saveOrbLook(scale: Float, opacity: Float, compact: Boolean, dock: Boolean) = store.edit {
         it[K.orbScale] = scale; it[K.orbOpacity] = opacity; it[K.orbCompact] = compact; it[K.dockEdges] = dock
     }
+
+    suspend fun saveInstructions(text: String) = store.edit { it[K.customInstructions] = text.take(1500) }
+
+    suspend fun saveCommands(text: String) = store.edit { it[K.commands] = text.take(4000) }
 
     suspend fun savePrices(input: Float, cached: Float, output: Float) = store.edit {
         it[K.priceIn] = input; it[K.priceCached] = cached; it[K.priceOut] = output

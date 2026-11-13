@@ -59,6 +59,9 @@ fun ActivityScreen(go: (String) -> Unit) {
         GlassCard(Modifier.fillMaxWidth(), accent = if (st.taskActive) Nyro.Cyan.copy(alpha = 0.5f) else Nyro.GlassEdge) {
             if (st.taskActive || st.steps.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    st.confirmation?.let { c ->
+                        com.nyro.companion.ui.components.ConfirmationCard(c.risk, c.text, onAllow = { g.agent.answerConfirmation(true) }, onDeny = { g.agent.answerConfirmation(false) })
+                    }
                     Text(st.request, color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall)
                     StepList(st.steps)
                     if (st.taskActive) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

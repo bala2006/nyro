@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -78,6 +79,44 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
             }
         }
 
+        Gap(12)
+        SectionLabel("Your instructions and shortcuts")
+        GlassCard(Modifier.fillMaxWidth(), padding = 14) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                var instructions by remember { mutableStateOf(s.customInstructions) }
+                Text("Standing instructions", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                Text("Always followed by NYRO, e.g. \"Keep replies in Telugu when I write in Telugu\" or \"Never send messages after 10 pm\".", color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(instructions, { instructions = it }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 6, colors = fieldColors())
+                TextButton(onClick = { scope.launch { g.settings.saveInstructions(instructions) } }) { Text("Save instructions") }
+
+                Text("Personal commands", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                Text("Type the shortcut exactly as the whole message, and NYRO runs the instruction instead.", color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall)
+                var trigger by remember { mutableStateOf("") }
+                var instruction by remember { mutableStateOf("") }
+                OutlinedTextField(trigger, { trigger = it }, label = { Text("Shortcut, e.g. morning") }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = fieldColors())
+                OutlinedTextField(instruction, { instruction = it }, label = { Text("Instruction, e.g. Read my unread WhatsApp messages") }, modifier = Modifier.fillMaxWidth(), colors = fieldColors())
+                TextButton(onClick = {
+                    val t = trigger.trim().replace('\t', ' '); val i = instruction.trim().replace('\t', ' ')
+                    if (t.isNotEmpty() && i.isNotEmpty()) {
+                        val kept = s.commands.lines().filter { it.isNotBlank() && !it.startsWith("$t\t") }
+                        scope.launch { g.settings.saveCommands((kept + "$t\t$i").joinToString("\n")) }
+                        trigger = ""; instruction = ""
+                    }
+                }) { Text("Add shortcut") }
+                s.commands.lines().filter { it.contains('\t') }.forEach { line ->
+                    val (t, i) = line.split('\t', limit = 2)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(t, color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
+                            Text(i, color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall)
+                        }
+                        TextButton(onClick = {
+                            scope.launch { g.settings.saveCommands(s.commands.lines().filter { it.isNotBlank() && it != line }.joinToString("\n")) }
+                        }) { Text("Remove", color = Nyro.Danger) }
+                    }
+                }
+            }
+        }
         Gap(12)
         SectionLabel("Orb")
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
