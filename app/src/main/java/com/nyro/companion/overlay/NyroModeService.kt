@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.view.WindowManager
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.platform.ComposeView
@@ -31,6 +32,7 @@ import androidx.savedstate.setViewTreeSavedStateRegistryOwner
 import com.nyro.companion.NyroApp
 import com.nyro.companion.R
 import com.nyro.companion.access.ScreenCaptureManager
+import com.nyro.companion.tools.ScreenSession
 import com.nyro.companion.ui.MainActivity
 import com.nyro.companion.ui.theme.Nyro
 import com.nyro.companion.ui.theme.NyroTheme
@@ -83,6 +85,10 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         addOrb()
         addConfirm()
         addQuick()
+        roamer.start()
+        lifecycleScope.launch {
+            g.agent.state.map { st -> st.phase == com.nyro.companion.agent.Phase.EXECUTING }.distinctUntilChanged().collect { roamer.setWorking(it) }
+        }
         lifecycleScope.launch {
             g.settings.settings.map { it.orbOpacity }.distinctUntilChanged().collect { o ->
                 orbOpacity = o
@@ -118,6 +124,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             ACTION_OFF -> lifecycleScope.launch { NyroApp.graph.mode.disable() }
             ACTION_STOP -> NyroApp.graph.agent.stop()
             ACTION_LISTEN -> NyroApp.graph.agent.startListening()
+            ACTION_SHOW -> showMascot()
         }
         return START_STICKY
     }
@@ -125,6 +132,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     override fun onDestroy() {
         if (instance === this) { instance = null; NyroApp.graph.mode.onServiceStopped() }
         if (UiFeedback.host === this) UiFeedback.host = null
+        roamer.stop()
         NyroApp.graph.agent.stop()
         ScreenCaptureManager.release()
         if (::wm.isInitialized) {
@@ -172,10 +180,10 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_nyro)
             .setContentTitle("NYRO Mode is on")
-            .setContentText("Tap the orb to talk. Long-press it for quick actions.")
+            .setContentText("Tap NYRO to talk. Long-press it for quick actions.")
             .setContentIntent(open)
             .setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Talk", action(ACTION_LISTEN, 3)).build())
+            .addAction(if (hiddenUntil > 0L) Notification.Action.Builder(null, "Show NYRO", action(ACTION_SHOW, 4)).build() else Notification.Action.Builder(null, "Talk", action(ACTION_LISTEN, 3)).build())
             .addAction(Notification.Action.Builder(null, "Stop task", action(ACTION_STOP, 1)).build())
             .addAction(Notification.Action.Builder(null, "Normal Mode", action(ACTION_OFF, 2)).build())
             .build()
@@ -212,7 +220,9 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
     // ---------------- Windows ----------------
 
     private fun overlayParams(w: Int, h: Int, flags: Int) = WindowManager.LayoutParams(
-        w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags, PixelFormat.TRANSLUCENT,
+        // Windows added from a service are not hardware accelerated by default; the mascot's shader needs it.
+        w, h, WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, flags or WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+        PixelFormat.TRANSLUCENT,
     )
 
     private fun <T : View> T.owned(): T = apply {
@@ -242,8 +252,10 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = if (s.orbX < 0) dm.widthPixels - (88 * dm.density).toInt() else s.orbX
-            y = s.orbY.coerceIn(0, dm.heightPixels - (120 * dm.density).toInt())
+            val size = ((if (s.orbCompact) 28f else 72f * s.orbScale) + 12f) * dm.density
+            val rest = RoamPlanner.restSpot(safeArea(), size.toInt(), size.toInt())
+            x = if (s.orbX < 0) rest.first else s.orbX
+            y = if (s.orbY < 0) rest.second else s.orbY.coerceIn(0, dm.heightPixels - (120 * dm.density).toInt())
             alpha = s.orbOpacity
         }
         orbView = ComposeView(this).owned().apply {
@@ -253,9 +265,9 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
                     OrbOverlay(
                         onTap = { NyroApp.graph.agent.startListening() },
                         onLongPress = { toggleQuick() },
-                        onDragStart = { dragStartX = orbParams.x; dragStartY = orbParams.y },
+                        onDragStart = { dragStartX = orbParams.x; dragStartY = orbParams.y; roamer.onUserMoveStart() },
                         onDragBy = { dx, dy -> moveOrbTo(dragStartX + dx.toInt(), dragStartY + dy.toInt()) },
-                        onDragEnd = { snapOrb() },
+                        onDragEnd = { snapOrb(); roamer.onUserMoveEnd() },
                         onStop = { NyroApp.graph.agent.stop() },
                         orbOnRight = { orbParams.x > resources.displayMetrics.widthPixels / 2 },
                     )
@@ -346,15 +358,25 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         val dm = resources.displayMetrics
         val w = minOf((340 * dm.density).toInt(), dm.widthPixels - (32 * dm.density).toInt())
         quickParams = overlayParams(
-            w, WindowManager.LayoutParams.WRAP_CONTENT,
+            w, (560 * dm.density).toInt(),
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
         ).apply {
             gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            y = statusBarHeight() + (112 * dm.density).toInt()
+            y = statusBarHeight() + (12 * dm.density).toInt()
         }
         quickView = ComposeView(this).owned().apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(this@NyroModeService))
-            setContent { NyroTheme { if (quickOpen.value) QuickActions(onDone = { setQuickOpen(false) }) } }
+            setContent {
+                NyroTheme {
+                    if (quickOpen.value) MascotMenu(
+                        onDone = { setQuickOpen(false) },
+                        onInteract = { main.removeCallbacks(hideQuick); main.postDelayed(hideQuick, 20_000) },
+                        onHide = { hideMascotFor(60 * 60_000L) },
+                        onMoveToRest = { moveToRest() },
+                        onOpenNyro = { openNyro() },
+                    )
+                }
+            }
         }
     }
 
@@ -367,7 +389,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         val v = quickView ?: return
         if (on && !quickAttached) { quickAttached = true; runCatching { wm.addView(v, quickParams) } }
         if (!on && quickAttached) { quickAttached = false; runCatching { wm.removeView(v) } }
-        if (on) main.postDelayed(hideQuick, 8000)
+        if (on) main.postDelayed(hideQuick, 20_000)
     }
 
     private val tipsShown = HashSet<String>()
@@ -380,7 +402,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         if (NyroApp.graph.agent.state.value.taskActive) return
         if (!tipsShown.add(pkg)) return
         val tip = suggestionsFor(pkg).firstOrNull() ?: return
-        UiFeedback.notice("Tip: $tip. Long-press the orb.")
+        UiFeedback.notice("Tip: $tip. Long-press NYRO.")
     }
 
     /** Called by the accessibility service when the window list changes. Moves the orb above the keyboard. */
@@ -399,14 +421,81 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         runCatching { wm.updateViewLayout(v, orbParams) }
     }
 
+    // ---------------- Companion placement, roaming and hiding ----------------
+
+    private val roamer by lazy { Roamer(lifecycleScope, roamHost) }
+    private var hiddenUntil = 0L
+    private val showAgain = Runnable { showMascot() }
+
+    private val roamHost = object : Roamer.Host {
+        override fun area(): Area = safeArea()
+        override fun window(): Pair<Int, Int> = orbView?.let { it.width to it.height } ?: (0 to 0)
+        override fun position(): Pair<Int, Int> = orbParams.x to orbParams.y
+        override fun place(x: Int, y: Int) {
+            val v = orbView ?: return
+            if (orbParams.x == x && orbParams.y == y) return
+            orbParams.x = x
+            orbParams.y = y
+            runCatching { wm.updateViewLayout(v, orbParams) }
+        }
+        override fun density(): Float = resources.displayMetrics.density
+        override fun elements(): List<Area> = ScreenSession.last?.elements?.filter { it.clickable }?.map { Area.of(it.bounds) } ?: emptyList()
+        override fun gaze(dir: Float) { OverlayGaze.x.floatValue = dir }
+        override fun roamingAllowed(): Boolean =
+            NyroApp.graph.settings.current.roamMascot && hiddenUntil == 0L && orbView?.visibility == View.VISIBLE
+    }
+
+    private fun safeArea(): Area {
+        val dm = resources.displayMetrics
+        val insets = wm.currentWindowMetrics.windowInsets
+        val top = insets.getInsets(WindowInsets.Type.statusBars()).top
+        val bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+        return RoamPlanner.safeArea(dm.widthPixels, dm.heightPixels, top, bottom, dm.density, keyboardOpen)
+    }
+
+    /** Puts the companion in its resting corner and forgets the dragged position. */
+    private fun moveToRest() {
+        val v = orbView ?: return
+        val (x, y) = RoamPlanner.restSpot(safeArea(), v.width, v.height)
+        roamer.onUserMoveStart()
+        roamHost.place(x, y)
+        roamer.onUserMoveEnd()
+        lifecycleScope.launch { NyroApp.graph.settings.setOrbPosition(-1, -1) }
+    }
+
+    /** Hides the companion for [ms]. The notification offers "Show NYRO" until it comes back. */
+    private fun hideMascotFor(ms: Long) {
+        hiddenUntil = System.currentTimeMillis() + ms
+        orbView?.visibility = View.GONE
+        main.removeCallbacks(showAgain)
+        main.postDelayed(showAgain, ms)
+        refreshNotification()
+    }
+
+    private fun showMascot() {
+        main.removeCallbacks(showAgain)
+        hiddenUntil = 0L
+        orbView?.visibility = View.VISIBLE
+        refreshNotification()
+    }
+
+    private fun refreshNotification() {
+        if (!::wm.isInitialized) return
+        getSystemService(NotificationManager::class.java).notify(NOTIF_ID, notification())
+    }
+
+    private fun openNyro() {
+        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
     // ---------------- OverlayHost ----------------
 
-    override fun showTap(x: Float, y: Float, long: Boolean) { main.post { effects?.tap(x, y, long) } }
+    override fun showTap(x: Float, y: Float, long: Boolean) { main.post { effects?.tap(x, y, long); roamer.glance(x, y) } }
     override fun showSwipe(x1: Float, y1: Float, x2: Float, y2: Float) { main.post { effects?.swipe(x1, y1, x2, y2) } }
     override fun highlight(r: Rect) { main.post { effects?.highlight(r) } }
-    override fun focus(r: Rect) { main.post { effects?.focus(r) } }
-    override fun typing(r: Rect) { main.post { effects?.typing(r) } }
-    override fun scan() { main.post { effects?.scan() } }
+    override fun focus(r: Rect) { main.post { effects?.focus(r); roamer.lookAt(Area.of(r)) } }
+    override fun typing(r: Rect) { main.post { effects?.typing(r); roamer.typing(Area.of(r)) } }
+    override fun scan() { main.post { effects?.scan(); roamer.onScan() } }
     override fun setExecuting(on: Boolean) { main.post { effects?.setExecuting(on) } }
     override fun expandPanel() { /* the approval card follows agent state; nothing to open */ }
 
@@ -443,6 +532,7 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         const val ACTION_OFF = "com.nyro.companion.OFF"
         const val ACTION_STOP = "com.nyro.companion.STOP"
         const val ACTION_LISTEN = "com.nyro.companion.LISTEN"
+        const val ACTION_SHOW = "com.nyro.companion.SHOW"
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, NyroModeService::class.java))

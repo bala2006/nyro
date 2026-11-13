@@ -2,10 +2,13 @@ package com.nyro.companion.ui.screens
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,45 +21,57 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Cloud
-import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.Psychology
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Smartphone
-import androidx.compose.material.icons.filled.TaskAlt
-import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.KeyboardVoice
+import androidx.compose.material.icons.outlined.NorthEast
+import androidx.compose.material.icons.outlined.Psychology
+import androidx.compose.material.icons.outlined.Smartphone
+import androidx.compose.material.icons.outlined.TaskAlt
+import androidx.compose.material.icons.outlined.TouchApp
+import androidx.compose.material.icons.outlined.VerifiedUser
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nyro.companion.NyroApp
 import com.nyro.companion.ui.Routes
-import com.nyro.companion.ui.components.NyroOrb
+import com.nyro.companion.ui.components.IconBubble
+import com.nyro.companion.ui.components.ListRow
+import com.nyro.companion.ui.components.NyroMascot
+import com.nyro.companion.ui.components.RowDivider
 import com.nyro.companion.ui.components.SectionLabel
-import com.nyro.companion.ui.components.orbLabel
-import com.nyro.companion.ui.components.orbStateOf
+import com.nyro.companion.ui.components.StatusPill
+import com.nyro.companion.ui.components.mascotColor
+import com.nyro.companion.ui.components.mascotLabel
+import com.nyro.companion.ui.components.mascotStateOf
+import com.nyro.companion.ui.theme.CardShape
 import com.nyro.companion.ui.theme.GlassCard
 import com.nyro.companion.ui.theme.Nyro
+import com.nyro.companion.voice.VoiceEngine
 import kotlinx.coroutines.launch
 
 @Composable
@@ -71,146 +86,172 @@ fun DashboardScreen(go: (String) -> Unit) {
     val mic by g.voice.micLevel.collectAsStateWithLifecycle()
     val perms = rememberPerms()
     val aiReady = settings.provider.isComplete && g.keys.hasApiKey()
-    val orb = orbStateOf(st, speaking)
+    val mascot = mascotStateOf(st, speaking)
+    val busy = st.taskActive || speaking
+    val talk = { if (busy) g.agent.stop() else { g.agent.startListening(); go(Routes.CHAT) } }
 
     Column(
-        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = PageMargin),
     ) {
-        Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("NYRO", style = MaterialTheme.typography.displaySmall, color = Nyro.TextHi, modifier = Modifier.weight(1f))
-            Icon(Icons.Default.Settings, "Settings", tint = Nyro.TextMid, modifier = Modifier.clip(CircleShape).clickable { go(Routes.SETTINGS) }.padding(8.dp))
+            StatusPill(mascotLabel(mascot), mascotColor(mascot))
         }
-        Text("Your phone. Your intelligence.", style = MaterialTheme.typography.bodyMedium, color = Nyro.TextMid, modifier = Modifier.fillMaxWidth())
+        Text("Your phone. Your intelligence.", style = MaterialTheme.typography.bodyMedium, color = Nyro.TextMid)
+        Spacer(Modifier.height(18.dp))
 
-        // Hero entity: tap to talk right here
-        Box(Modifier.padding(vertical = 18.dp).size(220.dp), contentAlignment = Alignment.Center) {
-            NyroOrb(orb, mic, Modifier.fillMaxSize().clip(CircleShape).clickable {
-                if (st.taskActive || speaking) g.agent.stop() else { g.agent.startListening(); go(Routes.CHAT) }
-            })
-        }
-        Text(orbLabel(orb).uppercase(), style = MaterialTheme.typography.labelSmall, color = Nyro.Cyan)
-        Text(
-            if (st.taskActive) st.request else "Tap the core to talk",
-            style = MaterialTheme.typography.bodySmall, color = Nyro.TextLow, textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 2.dp, bottom = 18.dp),
-        )
-
-        // Mode switch
-        GlassCard(Modifier.fillMaxWidth(), accent = if (active) Nyro.Cyan.copy(alpha = 0.55f) else Nyro.GlassEdge) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(if (active) "NYRO Mode" else "Normal Mode", style = MaterialTheme.typography.titleMedium, color = Nyro.TextHi)
-                    Text(
-                        if (active) "The companion floats over every app. Tap it to talk, long-press to stop."
-                        else "No overlay, no microphone, no capture. Your phone is just your phone.",
-                        style = MaterialTheme.typography.bodySmall, color = Nyro.TextMid,
-                    )
-                }
-                Spacer(Modifier.width(12.dp))
-                Switch(
-                    checked = active,
-                    onCheckedChange = { on ->
-                        scope.launch {
-                            if (on) {
-                                if (!g.mode.enable()) {
-                                    Toast.makeText(ctx, "Allow “Display over other apps” for NYRO, then switch on again.", Toast.LENGTH_LONG).show()
-                                    runCatching { ctx.startActivity(g.mode.overlaySettingsIntent()) }
-                                }
-                            } else g.mode.disable()
-                        }
-                    },
-                    colors = SwitchDefaults.colors(checkedThumbColor = Nyro.Void, checkedTrackColor = Nyro.Cyan, uncheckedTrackColor = Nyro.Navy),
-                )
+        // Hero: the mascot in a card that glows in the color of what NYRO is doing.
+        val glow by animateColorAsState(mascotColor(mascot), tween(600), label = "heroGlow")
+        Column(
+            Modifier.fillMaxWidth().clip(CardShape)
+                .background(Nyro.Glass)
+                .background(Brush.radialGradient(listOf(glow.copy(alpha = if (Nyro.isDark) 0.24f else 0.16f), Color.Transparent)))
+                .border(1.dp, Nyro.GlassEdge, CardShape)
+                .padding(bottom = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            NyroMascot(
+                mascot, mic,
+                Modifier.size(230.dp).clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { talk() },
+            )
+            Text(
+                if (st.taskActive) st.request else "Tap NYRO to talk",
+                style = MaterialTheme.typography.bodyMedium, color = Nyro.TextMid, textAlign = TextAlign.Center,
+                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 24.dp),
+            )
+            Spacer(Modifier.height(14.dp))
+            Button(
+                onClick = talk,
+                colors = if (busy) ButtonDefaults.buttonColors(containerColor = Nyro.Danger) else ButtonDefaults.buttonColors(),
+                contentPadding = ButtonDefaults.ButtonWithIconContentPadding,
+                modifier = Modifier.height(48.dp),
+            ) {
+                Icon(if (busy) Icons.Default.Stop else Icons.Default.Mic, null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (busy) "Stop" else "Talk to NYRO")
             }
         }
         Spacer(Modifier.height(12.dp))
 
+        GlassCard(Modifier.fillMaxWidth(), accent = if (active) Nyro.Blue.copy(alpha = 0.5f) else Nyro.GlassEdge, padding = 0) {
+            ListRow(
+                title = if (active) "NYRO Mode" else "Normal Mode",
+                subtitle = if (active) "NYRO floats over every app. Tap it to talk, long-press to stop."
+                else "No overlay, no microphone, no capture. Your phone is just your phone.",
+                icon = Icons.Outlined.AutoAwesome,
+                tint = if (active) Nyro.Blue else Nyro.TextMid,
+                trailing = {
+                    Switch(
+                        checked = active,
+                        onCheckedChange = { on ->
+                            scope.launch {
+                                if (on) {
+                                    if (!g.mode.enable()) {
+                                        Toast.makeText(ctx, "Allow “Display over other apps” for NYRO, then switch on again.", Toast.LENGTH_LONG).show()
+                                        runCatching { ctx.startActivity(g.mode.overlaySettingsIntent()) }
+                                    }
+                                } else g.mode.disable()
+                            }
+                        },
+                    )
+                },
+            )
+        }
+
         // Setup checklist until everything essential is ready
-        val setupDone = aiReady && perms.overlay && perms.accessibility && perms.mic
-        AnimatedVisibility(!setupDone) {
+        val permsDone = perms.overlay && perms.accessibility && perms.mic
+        AnimatedVisibility(!(aiReady && permsDone)) {
             Column {
+                Spacer(Modifier.height(20.dp))
                 SectionLabel("Get started")
-                SetupStep(1, "Connect your Azure AI", if (aiReady) "Connected: ${settings.provider.deployment}" else "Endpoint, key and deployment", aiReady) { go(Routes.PROVIDER) }
-                SetupStep(2, "Grant permissions", listOfNotNull(
-                    "overlay".takeIf { !perms.overlay }, "phone control".takeIf { !perms.accessibility }, "microphone".takeIf { !perms.mic },
-                ).joinToString(", ").ifEmpty { "All set" }.let { if (it == "All set") it else "Missing: $it" }, perms.overlay && perms.accessibility && perms.mic) { go(Routes.PERMISSIONS) }
-                SetupStep(3, "Activate NYRO Mode", if (active) "On" else "Use the switch above", active) {}
-                Spacer(Modifier.height(12.dp))
+                GlassCard(Modifier.fillMaxWidth(), padding = 0) {
+                    Column {
+                        SetupRow("Connect your Azure AI", if (aiReady) "Connected: ${settings.provider.deployment}" else "Endpoint, key and deployment", aiReady, Icons.Outlined.Cloud) { go(Routes.PROVIDER) }
+                        RowDivider(70.dp)
+                        val missing = listOfNotNull(
+                            "overlay".takeIf { !perms.overlay }, "phone control".takeIf { !perms.accessibility }, "microphone".takeIf { !perms.mic },
+                        )
+                        SetupRow("Grant permissions", if (missing.isEmpty()) "All set" else "Missing: ${missing.joinToString(", ")}", permsDone, Icons.Outlined.VerifiedUser) { go(Routes.PERMISSIONS) }
+                        RowDivider(70.dp)
+                        SetupRow("Turn on NYRO Mode", if (active) "On" else "Use the switch above", active, Icons.Outlined.AutoAwesome, null)
+                    }
+                }
             }
         }
 
-        SectionLabel("Status", Modifier.fillMaxWidth())
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StatusChip("AI", if (aiReady) "Azure" else "Local only", aiReady, Modifier.weight(1f))
-            StatusChip("Control", if (perms.accessibility) "On" else "Off", perms.accessibility, Modifier.weight(1f))
-            StatusChip("Voice", if (perms.mic) when (g.voice.recognizerKind()) {
-                com.nyro.companion.voice.VoiceEngine.RecognizerKind.ON_DEVICE -> "On-device"
-                com.nyro.companion.voice.VoiceEngine.RecognizerKind.NETWORK_FALLBACK -> "Fallback"
-                else -> "Type only"
-            } else "No mic", perms.mic, Modifier.weight(1f))
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Status")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            StatusTile(Icons.Outlined.Cloud, "AI", if (aiReady) "Azure" else "Local only", aiReady, Modifier.weight(1f))
+            StatusTile(Icons.Outlined.TouchApp, "Control", if (perms.accessibility) "On" else "Off", perms.accessibility, Modifier.weight(1f))
+            StatusTile(
+                Icons.Outlined.KeyboardVoice, "Voice",
+                if (!perms.mic) "No mic" else when (g.voice.recognizerKind()) {
+                    VoiceEngine.RecognizerKind.ON_DEVICE -> "On-device"
+                    VoiceEngine.RecognizerKind.NETWORK_FALLBACK -> "Fallback"
+                    else -> "Type only"
+                },
+                perms.mic, Modifier.weight(1f),
+            )
         }
-        Spacer(Modifier.height(16.dp))
 
-        SectionLabel("Explore", Modifier.fillMaxWidth())
+        // Chat and Settings are tabs in the bottom bar, so they are not repeated here.
+        Spacer(Modifier.height(20.dp))
+        SectionLabel("Explore")
         val tiles = listOf(
-            Triple(Icons.AutoMirrored.Filled.Chat, "Conversation", Routes.CHAT),
-            Triple(Icons.Default.TaskAlt, "Tasks", Routes.TASKS),
-            Triple(Icons.Default.Smartphone, "Device", Routes.DEVICE),
-            Triple(Icons.Default.History, "History", Routes.HISTORY),
-            Triple(Icons.Default.Psychology, "Memory", Routes.MEMORY),
-            Triple(Icons.Default.Cloud, "AI Provider", Routes.PROVIDER),
-            Triple(Icons.Default.VerifiedUser, "Permissions", Routes.PERMISSIONS),
-            Triple(Icons.Default.Tune, "Settings", Routes.SETTINGS),
+            Tile(Icons.Outlined.TaskAlt, "Tasks", "What NYRO did", Routes.TASKS),
+            Tile(Icons.Outlined.Smartphone, "Device", "Battery, storage, network", Routes.DEVICE),
+            Tile(Icons.Outlined.History, "History", "Past conversations", Routes.HISTORY),
+            Tile(Icons.Outlined.Psychology, "Memory", "What NYRO remembers", Routes.MEMORY),
+            Tile(Icons.Outlined.Cloud, "AI Provider", "Your Azure connection", Routes.PROVIDER),
+            Tile(Icons.Outlined.VerifiedUser, "Permissions", "What NYRO may use", Routes.PERMISSIONS),
         )
         tiles.chunked(2).forEach { row ->
-            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { (icon, label, route) -> Tile(icon, label, Modifier.weight(1f)) { go(route) } }
+            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { tile -> TileCard(tile, Modifier.weight(1f)) { go(tile.route) } }
             }
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(24.dp + LocalBottomInset.current))
     }
 }
 
 @Composable
-private fun SetupStep(n: Int, title: String, sub: String, done: Boolean, onClick: () -> Unit) {
-    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), padding = 14,
-        accent = if (done) Nyro.Ok.copy(alpha = 0.35f) else Nyro.Cyan.copy(alpha = 0.35f)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(30.dp).clip(CircleShape).background(if (done) Nyro.Ok.copy(alpha = 0.2f) else Nyro.Cyan.copy(alpha = 0.15f)), contentAlignment = Alignment.Center) {
-                Text(if (done) "✓" else "$n", color = if (done) Nyro.Ok else Nyro.Cyan, style = MaterialTheme.typography.titleSmall)
-            }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall)
-                Text(sub, color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall)
-            }
-            Icon(Icons.Default.ChevronRight, null, tint = Nyro.TextLow)
-        }
-    }
+private fun SetupRow(title: String, sub: String, done: Boolean, icon: ImageVector, onClick: (() -> Unit)?) {
+    ListRow(
+        title = title, subtitle = sub,
+        icon = if (done) Icons.Outlined.CheckCircle else icon,
+        tint = if (done) Nyro.Ok else Nyro.Blue,
+        onClick = onClick,
+    )
 }
 
 @Composable
-private fun StatusChip(label: String, value: String, ok: Boolean, modifier: Modifier) {
-    GlassCard(modifier, padding = 12, accent = if (ok) Nyro.Cyan.copy(alpha = 0.3f) else Nyro.GlassEdge) {
+private fun StatusTile(icon: ImageVector, label: String, value: String, ok: Boolean, modifier: Modifier) {
+    GlassCard(modifier, padding = 12) {
         Column {
-            Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = Nyro.TextLow)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(if (ok) Nyro.Ok else Nyro.Amber))
-                Spacer(Modifier.width(6.dp))
-                Text(value, style = MaterialTheme.typography.titleSmall, color = Nyro.TextHi, maxLines = 1)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Tile(icon: ImageVector, label: String, modifier: Modifier, onClick: () -> Unit) {
-    GlassCard(modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), padding = 16) {
-        Column {
-            Icon(icon, null, tint = Nyro.Cyan, modifier = Modifier.size(22.dp))
+            IconBubble(icon, if (ok) Nyro.Ok else Nyro.Amber, size = 32.dp)
             Spacer(Modifier.height(10.dp))
-            Text(label, style = MaterialTheme.typography.titleSmall, color = Color.White)
+            Text(label, style = MaterialTheme.typography.labelMedium, color = Nyro.TextMid)
+            Text(value, style = MaterialTheme.typography.titleSmall, color = Nyro.TextHi, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+private class Tile(val icon: ImageVector, val label: String, val sub: String, val route: String)
+
+@Composable
+private fun TileCard(tile: Tile, modifier: Modifier, onClick: () -> Unit) {
+    GlassCard(modifier.clip(CardShape).clickable(onClick = onClick), padding = 16) {
+        Column {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                IconBubble(tile.icon)
+                Spacer(Modifier.weight(1f))
+                Icon(Icons.Outlined.NorthEast, null, tint = Nyro.TextLow, modifier = Modifier.size(18.dp))
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(tile.label, style = MaterialTheme.typography.titleMedium, color = Nyro.TextHi)
+            Text(tile.sub, style = MaterialTheme.typography.bodySmall, color = Nyro.TextMid, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

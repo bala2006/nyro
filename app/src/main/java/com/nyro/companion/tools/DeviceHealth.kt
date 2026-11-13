@@ -75,7 +75,7 @@ fun healthReport(): String {
     if (n.s("connected") != "true") findings += "No network connection."
     else if (n.s("validated_internet") != "true") findings += "Connected to a network, but the internet is not reachable. Check Wi-Fi or mobile data."
     if (NyroAccessibilityService.current == null) findings += "NYRO phone control is off, so screen actions will fail. Enable it in Permissions."
-    if (!Settings.canDrawOverlays(g.context)) findings += "Display over other apps is off, so the NYRO orb won't show."
+    if (!Settings.canDrawOverlays(g.context)) findings += "Display over other apps is off, so floating NYRO won't show."
     if (NyroNotificationListener.instance == null) findings += "Notification access is off. Summaries of notifications won't work."
 
     val header = "Battery ${b.s("percent") ?: "?"}% (${b.s("status") ?: "?"}), memory ${m.s("used_percent") ?: "?"}% used, storage ${st.s("used_percent") ?: "?"}% used, network ${n.s("transport") ?: "?"}."
