@@ -33,7 +33,7 @@ fun CapabilitiesScreen(onBack: () -> Unit, go: (String) -> Unit) {
     val voice = g.voice.recognizerKind()
 
     val items = listOf(
-        Capability("Floating orb and status", p.overlay, "The orb and status pill over other apps.", "Allow “Display over other apps” in Permissions.", Routes.PERMISSIONS),
+        Capability("Floating NYRO and status", p.overlay, "NYRO and its status pill over other apps.", "Allow “Display over other apps” in Permissions.", Routes.PERMISSIONS),
         Capability("Control the phone", p.accessibility, "Read the screen, tap, type, scroll, go back and home.", "Enable NYRO Phone Control in Permissions.", Routes.PERMISSIONS),
         Capability("Voice input", p.mic && voice != VoiceEngine.RecognizerKind.UNAVAILABLE, "Speak instead of typing.", if (!p.mic) "Grant the microphone in Permissions." else "On this phone, speech recognition isn't available. Enable the fallback in Settings → Voice.", Routes.PERMISSIONS),
         Capability("Azure AI reasoning", aiReady, "Plans and answers with your Azure deployment.", "Add the endpoint, key and deployment in AI Provider.", Routes.PROVIDER),

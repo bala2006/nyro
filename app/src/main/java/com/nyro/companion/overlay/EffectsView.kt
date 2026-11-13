@@ -30,7 +30,7 @@ import com.nyro.companion.ui.theme.Nyro
  *  - a pulsing typing indicator on the field NYRO is typing into
  *  - a scan sweep while NYRO reads the screen
  *  - an animated border while a tool runs
- *  - the status pill at the top, visible only while NYRO is busy and for 5 s after
+ *  - the status pill at the bottom, above the gesture bar, visible only while NYRO is busy and for 5 s after
  * Frames are scheduled only while something is animating, so the idle overlay costs nothing.
  */
 class EffectsView(context: Context) : View(context) {
@@ -294,7 +294,9 @@ class EffectsView(context: Context) : View(context) {
         val tw = maxOf(pillText.measureText(label), sub?.let { pillSub.measureText(it) } ?: 0f)
         val h = (if (sub != null) 46f else 32f) * density
         val padX = 14f * density
-        val top = rootWindowInsets?.getInsets(android.view.WindowInsets.Type.statusBars())?.top?.toFloat()?.plus(4f * density) ?: (34f * density)
+        // The pill sits above the gesture bar, at the bottom of the screen.
+        val navBottom = rootWindowInsets?.getInsets(android.view.WindowInsets.Type.navigationBars())?.bottom?.toFloat() ?: 0f
+        val top = height - navBottom - 44f * density - h
         val w = tw + padX * 2 + 12f * density
         val left = (width - w) / 2f
         val rr = RectF(left, top, left + w, top + h)

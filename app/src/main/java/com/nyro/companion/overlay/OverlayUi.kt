@@ -60,10 +60,10 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.nyro.companion.NyroApp
 import com.nyro.companion.ui.components.ConfirmationCard
-import com.nyro.companion.ui.components.NyroOrb
+import com.nyro.companion.ui.components.NyroMascot
 import com.nyro.companion.ui.components.StepList
-import com.nyro.companion.ui.components.orbLabel
-import com.nyro.companion.ui.components.orbStateOf
+import com.nyro.companion.ui.components.mascotLabel
+import com.nyro.companion.ui.components.mascotStateOf
 import com.nyro.companion.ui.theme.Nyro
 
 /**
@@ -90,16 +90,16 @@ fun OrbOverlay(
     val mic by g.voice.micLevel.collectAsStateWithLifecycle()
     val mood by g.agent.mood.collectAsStateWithLifecycle()
     val settings by g.settings.settings.collectAsStateWithLifecycle()
-    val base = orbStateOf(st, speaking)
+    val base = mascotStateOf(st, speaking)
     // After a task the orb shows its mood briefly; otherwise it shows the live state.
-    val orb = if (base == com.nyro.companion.ui.components.OrbState.IDLE && mood != null) {
-        if (mood == "happy") com.nyro.companion.ui.components.OrbState.HAPPY else com.nyro.companion.ui.components.OrbState.CONFUSED
+    val orb = if (base == com.nyro.companion.ui.components.MascotState.IDLE && mood != null) {
+        if (mood == "happy") com.nyro.companion.ui.components.MascotState.HAPPY else com.nyro.companion.ui.components.MascotState.CONFUSED
     } else base
     val busy = st.taskActive || speaking || st.phase == com.nyro.companion.agent.Phase.LISTENING
     val size = if (settings.orbCompact) 28.dp else 72.dp * settings.orbScale
 
     Box(Modifier.size(size + 12.dp), contentAlignment = Alignment.Center) {
-        NyroOrb(
+        NyroMascot(
             orb, mic,
             Modifier
                 .size(size)
@@ -123,6 +123,7 @@ fun OrbOverlay(
                     }
                     true
                 },
+            watch = OverlayGaze.x.floatValue,
         )
         AnimatedVisibility(
             busy, enter = scaleIn() + fadeIn(), exit = scaleOut() + fadeOut(),

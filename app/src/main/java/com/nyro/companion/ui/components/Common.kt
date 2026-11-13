@@ -44,12 +44,12 @@ import com.nyro.companion.tools.Risk
 import com.nyro.companion.ui.theme.Nyro
 
 @Composable
-fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit, modifier: Modifier = Modifier, placeholder: String = "Ask or tell NYRO what to do") {
+fun ChatInput(value: String, onValueChange: (String) -> Unit, onSend: () -> Unit, modifier: Modifier = Modifier, placeholder: String = "Ask NYRO anything") {
     OutlinedTextField(
         value = value, onValueChange = onValueChange, modifier = modifier,
         placeholder = { Text(placeholder, color = Nyro.TextLow) },
         maxLines = 4,
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(24.dp),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
         keyboardActions = KeyboardActions(onSend = { onSend() }),
         trailingIcon = {
@@ -115,4 +115,4 @@ fun StepList(steps: List<Step>) {
 
 @Composable
 fun SectionLabel(text: String, modifier: Modifier = Modifier) =
-    Text(text.uppercase(), style = MaterialTheme.typography.labelSmall, color = Nyro.TextLow, modifier = modifier.padding(start = 4.dp, bottom = 6.dp))
+    Text(text, style = MaterialTheme.typography.titleMedium, color = Nyro.TextHi, modifier = modifier.padding(start = 2.dp, top = 6.dp, bottom = 10.dp))

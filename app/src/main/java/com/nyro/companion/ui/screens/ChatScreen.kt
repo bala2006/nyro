@@ -1,6 +1,8 @@
 package com.nyro.companion.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +22,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Pause
@@ -48,16 +49,19 @@ import com.nyro.companion.data.MessageEntity
 import com.nyro.companion.overlay.RoundAction
 import com.nyro.companion.ui.components.ChatInput
 import com.nyro.companion.ui.components.ConfirmationCard
-import com.nyro.companion.ui.components.NyroOrb
+import com.nyro.companion.ui.components.MascotState
+import com.nyro.companion.ui.components.NyroMascot
+import com.nyro.companion.ui.components.mascotColor
 import com.nyro.companion.ui.components.StepList
-import com.nyro.companion.ui.components.orbLabel
-import com.nyro.companion.ui.components.orbStateOf
+import com.nyro.companion.ui.components.mascotLabel
+import com.nyro.companion.ui.components.mascotStateOf
 import com.nyro.companion.ui.theme.GlassCard
 import com.nyro.companion.ui.theme.Nyro
 import kotlinx.coroutines.flow.flowOf
 
+/** Chat is a top-level tab, so its header has no back action. */
 @Composable
-fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
+fun ChatScreen(go: (String) -> Unit) {
     val g = NyroApp.graph
     val cid by g.agent.conversationId.collectAsStateWithLifecycle()
     val messagesFlow = remember(cid) { cid?.let { g.dao.messages(it) } ?: flowOf(emptyList()) }
@@ -69,7 +73,7 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
     val st by g.agent.state.collectAsStateWithLifecycle()
     val speaking by g.voice.speaking.collectAsStateWithLifecycle()
     val mic by g.voice.micLevel.collectAsStateWithLifecycle()
-    val orb = orbStateOf(st, speaking)
+    val orb = mascotStateOf(st, speaking)
     var input by remember { mutableStateOf("") }
     val list = rememberLazyListState()
     val live = st.taskActive || st.phase == Phase.LISTENING || st.confirmation != null || st.phase == Phase.ERROR
@@ -79,13 +83,17 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-        Row(Modifier.fillMaxWidth().padding(6.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Nyro.TextHi) }
-            NyroOrb(orb, mic, Modifier.size(38.dp))
-            Spacer(Modifier.width(10.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(start = PageMargin, end = 12.dp, top = 16.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Column(Modifier.weight(1f)) {
-                Text("NYRO", style = MaterialTheme.typography.titleMedium, color = Nyro.TextHi)
-                Text(orbLabel(orb) + if (st.localOnly) " · local mode" else "", style = MaterialTheme.typography.labelSmall, color = Nyro.Cyan)
+                Text("Chat", style = MaterialTheme.typography.displaySmall, color = Nyro.TextHi)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    NyroMascot(orb, mic, Modifier.size(40.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(mascotLabel(orb) + if (st.localOnly) " · local mode" else "", style = MaterialTheme.typography.labelMedium, color = mascotColor(orb))
+                }
             }
             if (st.taskActive) IconButton(onClick = { g.agent.togglePause() }) {
                 Icon(if (paused) Icons.Default.PlayArrow else Icons.Default.Pause, if (paused) "Resume" else "Pause", tint = Nyro.TextMid)
@@ -99,13 +107,13 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
         if (priv) Text(
             "Private session: nothing from this chat is saved to history, tasks or memory.",
             color = Nyro.Amber, style = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.padding(horizontal = 16.dp),
+            modifier = Modifier.padding(horizontal = PageMargin),
         )
         LazyColumn(
-            Modifier.weight(1f).fillMaxWidth().padding(horizontal = 14.dp), state = list,
+            Modifier.weight(1f).fillMaxWidth().padding(horizontal = PageMargin), state = list,
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            if (messages.isEmpty() && !live) item { EmptyHint() }
+            if (messages.isEmpty() && !live) item { EmptyHint(orb) { input = it } }
             items(messages, key = { it.id }) { m -> Bubble(m) }
             if (live) item(key = "live") {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -118,7 +126,10 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
             }
         }
 
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = PageMargin, end = PageMargin, top = 4.dp, bottom = 12.dp + LocalBottomInset.current),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             ChatInput(input, { input = it }, onSend = { if (input.isNotBlank()) { g.agent.submit(input); input = "" } }, Modifier.weight(1f))
             Spacer(Modifier.width(8.dp))
             if (st.taskActive || speaking) RoundAction(Icons.Default.Stop, "Stop", Nyro.Danger) { g.agent.stop() }
@@ -127,19 +138,26 @@ fun ChatScreen(onBack: () -> Unit, go: (String) -> Unit) {
     }
 }
 
+/** Empty conversation: the mascot and a few example requests. Tapping one puts it in the input to edit or send. */
 @Composable
-private fun EmptyHint() {
-    Column(Modifier.fillMaxWidth().padding(top = 40.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+private fun EmptyHint(state: MascotState, onPick: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        NyroMascot(state, modifier = Modifier.size(150.dp))
         Text("What should we do?", style = MaterialTheme.typography.headlineSmall, color = Nyro.TextHi)
-        Spacer(Modifier.size(12.dp))
+        Text("Ask a question or tell NYRO what to do on your phone.", style = MaterialTheme.typography.bodyMedium, color = Nyro.TextMid, modifier = Modifier.padding(top = 4.dp, bottom = 16.dp))
         listOf(
             "How hot is my battery right now?",
             "Open YouTube and search for Android AI agent tutorials",
             "What's on my screen?",
             "Turn on the flashlight",
             "Summarize my notifications",
-        ).forEach {
-            Text("“$it”", style = MaterialTheme.typography.bodyMedium, color = Nyro.TextMid, modifier = Modifier.padding(vertical = 3.dp))
+        ).forEach { s ->
+            Text(
+                s, style = MaterialTheme.typography.bodyMedium, color = Nyro.TextHi,
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(16.dp))
+                    .background(Nyro.Glass).border(1.dp, Nyro.GlassEdge, RoundedCornerShape(16.dp))
+                    .clickable { onPick(s) }.padding(horizontal = 16.dp, vertical = 12.dp),
+            )
         }
     }
 }
@@ -150,11 +168,15 @@ private fun Bubble(m: MessageEntity) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = if (user) Arrangement.End else Arrangement.Start) {
         Box(
             Modifier.widthIn(max = 320.dp)
-                .clip(if (user) RoundedCornerShape(16.dp, 16.dp, 4.dp, 16.dp) else RoundedCornerShape(16.dp, 16.dp, 16.dp, 4.dp))
-                .background(if (user) Nyro.Blue.copy(alpha = 0.28f) else Nyro.Navy.copy(alpha = 0.85f))
+                .clip(if (user) RoundedCornerShape(18.dp, 18.dp, 6.dp, 18.dp) else RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp))
+                .background(if (user) Nyro.Blue else Nyro.Glass)
+                .then(if (user) Modifier else Modifier.border(1.dp, Nyro.GlassEdge, RoundedCornerShape(18.dp, 18.dp, 18.dp, 6.dp)))
                 .padding(horizontal = 14.dp, vertical = 10.dp),
         ) {
-            Text(m.content, color = if (m.content.startsWith("⚠")) Nyro.Danger else Nyro.TextHi, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                m.content, style = MaterialTheme.typography.bodyLarge,
+                color = when { user -> Nyro.OnPrimary; m.content.startsWith("⚠") -> Nyro.Danger; else -> Nyro.TextHi },
+            )
         }
     }
 }

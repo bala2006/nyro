@@ -18,6 +18,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
@@ -41,6 +42,11 @@ import com.nyro.companion.NyroApp
 import com.nyro.companion.data.NyroSettings
 import com.nyro.companion.ui.Routes
 import com.nyro.companion.ui.components.SectionLabel
+import com.nyro.companion.ui.components.ListRow
+import com.nyro.companion.ui.components.RowDivider
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.VerifiedUser
 import com.nyro.companion.ui.theme.GlassCard
 import com.nyro.companion.ui.theme.Nyro
 import com.nyro.companion.voice.VoiceEngine
@@ -48,7 +54,7 @@ import kotlinx.coroutines.launch
 import java.util.Locale
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
+fun SettingsScreen(go: (String) -> Unit) {
     val g = NyroApp.graph
     val s by g.settings.settings.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
@@ -66,10 +72,16 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
         }) { clear = null }
     }
 
-    ScreenFrame("Settings", onBack) {
-        NavRow("AI Provider", s.provider.deployment.ifBlank { "Not configured" }) { go(Routes.PROVIDER) }
-        NavRow("Permissions", "Overlay, phone control, microphone, notifications") { go(Routes.PERMISSIONS) }
-        NavRow("What NYRO can access", "A plain list of what works now and what needs setup") { go(Routes.CAPABILITIES) }
+    ScreenFrame("Settings", onBack = null) {
+        GlassCard(Modifier.fillMaxWidth(), padding = 0) {
+            Column {
+                ListRow("AI Provider", s.provider.deployment.ifBlank { "Not configured" }, Icons.Outlined.Cloud, onClick = { go(Routes.PROVIDER) })
+                RowDivider(70.dp)
+                ListRow("Permissions", "Overlay, phone control, microphone, notifications", Icons.Outlined.VerifiedUser, onClick = { go(Routes.PERMISSIONS) })
+                RowDivider(70.dp)
+                ListRow("What NYRO can access", "What works now and what needs setup", Icons.Outlined.Checklist, onClick = { go(Routes.CAPABILITIES) })
+            }
+        }
 
         Gap(12)
         SectionLabel("Appearance")
@@ -87,7 +99,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
                 Text("Standing instructions", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
                 Text("Always followed by NYRO, e.g. \"Keep replies in Telugu when I write in Telugu\" or \"Never send messages after 10 pm\".", color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall)
                 OutlinedTextField(instructions, { instructions = it }, modifier = Modifier.fillMaxWidth(), minLines = 2, maxLines = 6, colors = fieldColors())
-                TextButton(onClick = { scope.launch { g.settings.saveInstructions(instructions) } }) { Text("Save instructions") }
+                FilledTonalButton(onClick = { scope.launch { g.settings.saveInstructions(instructions) } }) { Text("Save instructions") }
 
                 Text("Personal commands", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
                 Text("Type the shortcut exactly as the whole message, and NYRO runs the instruction instead.", color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall)
@@ -95,7 +107,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
                 var instruction by remember { mutableStateOf("") }
                 OutlinedTextField(trigger, { trigger = it }, label = { Text("Shortcut, e.g. morning") }, singleLine = true, modifier = Modifier.fillMaxWidth(), colors = fieldColors())
                 OutlinedTextField(instruction, { instruction = it }, label = { Text("Instruction, e.g. Read my unread WhatsApp messages") }, modifier = Modifier.fillMaxWidth(), colors = fieldColors())
-                TextButton(onClick = {
+                FilledTonalButton(onClick = {
                     val t = trigger.trim().replace('\t', ' '); val i = instruction.trim().replace('\t', ' ')
                     if (t.isNotEmpty() && i.isNotEmpty()) {
                         val kept = s.commands.lines().filter { it.isNotBlank() && !it.startsWith("$t\t") }
@@ -118,17 +130,20 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
             }
         }
         Gap(12)
-        SectionLabel("Orb")
+        SectionLabel("Floating companion")
         GlassCard(Modifier.fillMaxWidth(), padding = 14) {
             Column {
-                Toggle("Compact orb", "A small dot instead of the full orb.", s.orbCompact) { v ->
+                Toggle("Compact companion", "A small dot instead of the full character.", s.orbCompact) { v ->
                     scope.launch { g.settings.saveOrbLook(s.orbScale, s.orbOpacity, v, s.dockEdges) }
+                }
+                Toggle("Roam around the screen", "NYRO moves around the screen and checks the area while it works. Turn off to keep it in one place.", s.roamMascot) { v ->
+                    scope.launch { g.settings.setRoamMascot(v) }
                 }
                 Text("Size ${"%.1f".format(s.orbScale)}×", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
                 Slider(s.orbScale, { v -> scope.launch { g.settings.saveOrbLook((v * 10).toInt() / 10f, s.orbOpacity, s.orbCompact, s.dockEdges) } }, valueRange = 0.7f..1.4f, colors = sliderColors())
                 Text("Opacity ${(s.orbOpacity * 100).toInt()}%", color = Nyro.TextHi, style = MaterialTheme.typography.bodyMedium)
                 Slider(s.orbOpacity, { v -> scope.launch { g.settings.saveOrbLook(s.orbScale, (v * 20).toInt() / 20f, s.orbCompact, s.dockEdges) } }, valueRange = 0.35f..1f, colors = sliderColors())
-                Toggle("Dock to screen edges", "Snap the orb to the nearest left or right edge when you let go.", s.dockEdges) { v ->
+                Toggle("Dock to screen edges", "Snap NYRO to the nearest left or right edge when you let go.", s.dockEdges) { v ->
                     scope.launch { g.settings.saveOrbLook(s.orbScale, s.orbOpacity, s.orbCompact, v) }
                 }
             }
@@ -210,7 +225,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
                 "• Toggling Wi-Fi, Bluetooth, mobile data or airplane mode directly. NYRO opens the setting or panel and taps the switch for you.\n" +
                     "• Reading or capturing secure screens (banking apps, DRM video, password fields).\n" +
                     "• Bypassing lock screen, biometrics, permission dialogs or entering passwords/OTPs. NYRO always hands these to you.\n" +
-                    "• Always-on wake word in the background. Use the orb, the notification's Talk button, or the dashboard.\n" +
+                    "• Always-on wake word in the background. Use the floating NYRO, the notification's Talk button, or the dashboard.\n" +
                     "• Placing calls or sending SMS silently. NYRO prepares them and taps Send/Call only after you confirm.\n" +
                     "• Apps that draw their UI without accessibility info expose little structure; NYRO falls back to screenshots.",
                 color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall,
@@ -222,19 +237,7 @@ fun SettingsScreen(onBack: () -> Unit, go: (String) -> Unit) {
 }
 
 @Composable
-private fun NavRow(title: String, sub: String, onClick: () -> Unit) {
-    GlassCard(Modifier.fillMaxWidth().padding(bottom = 8.dp).clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick), padding = 14) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(title, color = Nyro.TextHi, style = MaterialTheme.typography.titleSmall)
-                Text(sub, color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall)
-            }
-            Icon(Icons.Default.ChevronRight, null, tint = Nyro.TextLow)
-        }
-    }
-}
 
-@Composable
 private fun Toggle(title: String, sub: String, value: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -242,12 +245,12 @@ private fun Toggle(title: String, sub: String, value: Boolean, onChange: (Boolea
             Text(sub, color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.width(10.dp))
-        Switch(value, onChange, colors = SwitchDefaults.colors(checkedThumbColor = Nyro.Void, checkedTrackColor = Nyro.Cyan, uncheckedTrackColor = Nyro.Navy))
+        Switch(value, onChange)
     }
 }
 
 @Composable
-private fun sliderColors() = SliderDefaults.colors(thumbColor = Nyro.Cyan, activeTrackColor = Nyro.Cyan, inactiveTrackColor = Nyro.Navy)
+private fun sliderColors() = SliderDefaults.colors()
 
 @Composable
 private fun VoicePicker(current: String, onPick: (String) -> Unit) {
