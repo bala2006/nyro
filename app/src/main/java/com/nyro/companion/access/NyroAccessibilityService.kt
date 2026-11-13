@@ -41,7 +41,10 @@ class NyroAccessibilityService : AccessibilityService() {
         }
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString().orEmpty()
-            if (pkg.isNotEmpty() && pkg != packageName) foregroundPackage = pkg
+            if (pkg.isNotEmpty() && pkg != packageName && pkg != foregroundPackage) {
+                foregroundPackage = pkg
+                NyroModeService.instance?.onForegroundApp(pkg)
+            }
         }
     }
 

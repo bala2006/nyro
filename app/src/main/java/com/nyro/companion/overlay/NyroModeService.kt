@@ -370,6 +370,19 @@ class NyroModeService : LifecycleService(), SavedStateRegistryOwner, ViewModelSt
         if (on) main.postDelayed(hideQuick, 8000)
     }
 
+    private val tipsShown = HashSet<String>()
+
+    /**
+     * Proactive tip: the first time NYRO sees an app that has suggestions, the status pill shows one
+     * tip. Nothing runs by itself; the user can open quick actions (long-press) to use it.
+     */
+    fun onForegroundApp(pkg: String) {
+        if (NyroApp.graph.agent.state.value.taskActive) return
+        if (!tipsShown.add(pkg)) return
+        val tip = suggestionsFor(pkg).firstOrNull() ?: return
+        UiFeedback.notice("Tip: $tip. Long-press the orb.")
+    }
+
     /** Called by the accessibility service when the window list changes. Moves the orb above the keyboard. */
     fun onKeyboardState(open: Boolean) {
         if (open == keyboardOpen) return
