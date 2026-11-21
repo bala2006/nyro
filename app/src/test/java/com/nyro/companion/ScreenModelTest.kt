@@ -5,7 +5,7 @@ import com.nyro.companion.ai.Msg
 import com.nyro.companion.exec.ImageHash
 import com.nyro.companion.exec.ObsRenderer
 import com.nyro.companion.exec.ScreenChange
-import com.nyro.companion.exec.ScreenshotPolicy
+import com.nyro.companion.exec.VisionPolicy
 import com.nyro.companion.perf.LatencyStats
 import com.nyro.companion.perf.Clock
 import com.nyro.companion.perf.Metric
@@ -102,14 +102,10 @@ class ScreenModelTest {
     }
 
     @Test fun noAutomaticScreenshotWhenTheTreeIsEnough() {
-        fun input(elements: Int = 40, interactive: Int = 12, shot: Boolean = false, allowed: Boolean = true, a11y: Boolean = true) =
-            ScreenshotPolicy.Input(allowed, a11y, elements, interactive, shot)
-        assertFalse("a normal screen needs no picture", ScreenshotPolicy.shouldAttachAutomatically(input()))
-        assertTrue("an empty tree (canvas, game, video) falls back to a picture", ScreenshotPolicy.shouldAttachAutomatically(input(elements = 0, interactive = 0)))
-        assertTrue("text only, nothing tappable", ScreenshotPolicy.shouldAttachAutomatically(input(elements = 8, interactive = 0)))
-        assertFalse("never when the user disabled screenshots", ScreenshotPolicy.shouldAttachAutomatically(input(elements = 0, interactive = 0, allowed = false)))
-        assertFalse("never twice in one batch", ScreenshotPolicy.shouldAttachAutomatically(input(elements = 0, interactive = 0, shot = true)))
-        assertFalse(ScreenshotPolicy.shouldAttachAutomatically(input(elements = 0, interactive = 0, a11y = false)))
+        assertTrue("a normal screen needs no picture", VisionPolicy.forAuto(allowed = true, elements = 40, interactive = 12) == null)
+        assertTrue("an empty tree (canvas, game, video) falls back to a picture", VisionPolicy.forAuto(allowed = true, elements = 0, interactive = 0) != null)
+        assertTrue("text only, nothing tappable", VisionPolicy.forAuto(allowed = true, elements = 8, interactive = 0) != null)
+        assertTrue("never when the user disabled screenshots", VisionPolicy.forAuto(allowed = false, elements = 0, interactive = 0) == null)
     }
 
     @Test fun identicalPicturesAreRecognised() {

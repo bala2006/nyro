@@ -41,6 +41,7 @@ object Metric {
     const val TOKENS_OUT = "tokens_out"
     const val REQUEST_BYTES = "request_bytes"
     const val IMAGE_BYTES = "image_bytes"
+    const val IMAGE_TOKENS = "image_tokens"
     const val SCREENSHOTS_SENT = "screenshots_sent"
 
     val LATENCY = listOf(ROUTE, PREPARE, HTTP_HEADERS, TTFT, GENERATION, MODEL_TOTAL, SNAPSHOT, LOOKUP, GESTURE, UI_WAIT, TOOL, VERIFY, SHOT_CAPTURE, SHOT_ENCODE, TASK, LOCAL_TASK)

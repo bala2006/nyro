@@ -117,15 +117,27 @@ object Msg {
     fun system(text: String) = buildJsonObject { put("role", "system"); put("content", text) }
     fun user(text: String) = buildJsonObject { put("role", "user"); put("content", text) }
     fun assistant(text: String) = buildJsonObject { put("role", "assistant"); put("content", text) }
-    fun userWithImage(text: String, jpegBase64: String) = buildJsonObject {
+    /**
+     * A user message with a picture. [detail] is always explicit (`low` or `high`): luna reads `auto` as
+     * `original`, which is neither bounded nor cheaper. [tokens] is recorded on the message so the context budget
+     * counts what Azure will bill, and the key is stripped before the body is written.
+     */
+    fun userWithImage(
+        text: String,
+        base64: String,
+        detail: String = "high",
+        mime: String = "image/jpeg",
+        tokens: Int = 0,
+    ) = buildJsonObject {
         put("role", "user")
         put("content", buildJsonArray {
             add(buildJsonObject { put("type", "text"); put("text", text) })
             add(buildJsonObject {
                 put("type", "image_url")
-                put("image_url", buildJsonObject { put("url", "data:image/jpeg;base64,$jpegBase64"); put("detail", "auto") })
+                put("image_url", buildJsonObject { put("url", "data:" + mime + ";base64," + base64); put("detail", detail) })
             })
         })
+        if (tokens > 0) put(IMAGE_TOKENS_KEY, tokens)
     }
     fun assistantToolCalls(content: String, calls: List<ToolCall>, rawItems: JsonArray? = null) = buildJsonObject {
         rawItems?.let { put(RAW_ITEMS_KEY, it) }
@@ -263,8 +275,9 @@ class AzureClient(
         }
     }
 
+    /** Removes client-side keys (Responses items, recorded image cost) before the body is written. */
     private fun stripPrivate(m: JsonObject): JsonObject =
-        if (RAW_ITEMS_KEY in m) JsonObject(m - RAW_ITEMS_KEY) else m
+        if (m.keys.none(::isPrivateKey)) m else JsonObject(m.filterKeys { !isPrivateKey(it) })
 
     private fun chatBody(cfg: ProviderConfig, deployment: String, messages: List<JsonObject>, tools: JsonArray?, stream: Boolean, maxTokens: Int?, effort: String?, cacheKey: String?) = buildJsonObject {
         if (cfg.type != ProviderType.AZURE_OPENAI) put("model", deployment)
@@ -311,11 +324,14 @@ class AzureClient(
                                         val p = part.jsonObject
                                         when (p.str("type")) {
                                             "text" -> add(buildJsonObject { put("type", "input_text"); put("text", p.str("text").orEmpty()) })
-                                            "image_url" -> add(buildJsonObject {
-                                                put("type", "input_image")
-                                                put("image_url", p["image_url"]?.jsonObject?.str("url").orEmpty())
-                                                put("detail", "auto")
-                                            })
+                                            "image_url" -> {
+                                                val img = p["image_url"]?.jsonObject
+                                                add(buildJsonObject {
+                                                    put("type", "input_image")
+                                                    put("image_url", img?.str("url").orEmpty())
+                                                    put("detail", img?.str("detail") ?: "high")
+                                                })
+                                            }
                                         }
                                     }
                                 })

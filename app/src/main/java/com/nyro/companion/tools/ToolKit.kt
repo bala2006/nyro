@@ -21,11 +21,23 @@ enum class Requirement(val label: String) {
     NYRO_MODE("NYRO Mode is off."),
 }
 
+/**
+ * A picture to attach to the next request. [tokens] is its exact image-token cost, so the context budget counts
+ * what Azure will bill instead of guessing, and [caption] is the text that goes with it.
+ */
+data class ModelImage(
+    val base64: String,
+    val mime: String,
+    val detail: String,
+    val tokens: Int,
+    val caption: String,
+)
+
 data class ToolResult(
     val text: String,
     val ok: Boolean = true,
-    /** Base64 JPEG to show the model (vision). */
-    val imageJpeg: String? = null,
+    /** Picture to show the model (vision). */
+    val image: ModelImage? = null,
     /** Reverses this action. Only set for actions that can be safely reversed (typed text, flashlight). */
     val undo: (suspend () -> Unit)? = null,
     /** How the screen differs from before the action, when the tool observed it. Null for tools that do not observe. */

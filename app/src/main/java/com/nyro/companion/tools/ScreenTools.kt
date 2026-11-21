@@ -1,33 +1,31 @@
 package com.nyro.companion.tools
 
 import android.accessibilityservice.AccessibilityService
-import android.graphics.Bitmap
-import android.util.Base64
 import com.nyro.companion.NyroApp
 import com.nyro.companion.access.NyroAccessibilityService
-import com.nyro.companion.access.ScreenCaptureManager
 import com.nyro.companion.access.ScreenReader
 import com.nyro.companion.access.ScreenSnapshot
 import com.nyro.companion.access.UiElement
 import com.nyro.companion.ai.Msg
 import com.nyro.companion.exec.Freshness
-import com.nyro.companion.exec.ImageHash
 import com.nyro.companion.exec.Obs
 import com.nyro.companion.exec.ObsRenderer
 import com.nyro.companion.exec.ScreenChange
+import com.nyro.companion.exec.VisionCost
+import com.nyro.companion.exec.VisionDecision
+import com.nyro.companion.exec.VisionPolicy
 import com.nyro.companion.overlay.UiFeedback
 import com.nyro.companion.perf.Metric
 import com.nyro.companion.perf.Perf
 import com.nyro.companion.perf.RealClock
 import kotlinx.coroutines.delay
-import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
 /** Shared state between screen tools within a task: the snapshot that element ids refer to. */
 object ScreenSession {
     @Volatile var last: ScreenSnapshot? = null
-    /** Screenshot pixels per screen pixel for the latest screenshot. */
-    @Volatile var shotScale: Float = 1f
+    /** Where the latest picture sits on the screen; "screenshot" coordinates are mapped back through it. */
+    @Volatile var shot: ShotGeometry? = null
 
     /** The screen as last written into a tool result. An identical screen is reported as "unchanged" instead of being sent again. */
     @Volatile private var lastSent: Obs? = null
@@ -39,13 +37,10 @@ object ScreenSession {
         try { return block() } finally { quiet = false }
     }
 
-    /** Hash of the last picture sent to Azure. */
-    @Volatile private var lastShotHash: Long? = null
-
     fun svc(): NyroAccessibilityService? = NyroAccessibilityService.current
 
     /** Call at the start of a task and after context compaction: the model no longer remembers earlier renders. */
-    fun resetSent() { lastSent = null; lastShotHash = null }
+    fun resetSent() { lastSent = null; ShotDedupe.reset(); shot = null }
 
     fun read(svc: NyroAccessibilityService, budgetMs: Long = ScreenReader.FULL_BUDGET_MS): ScreenSnapshot =
         ScreenReader.snapshot(svc, appLabel = { NyroApp.graph.apps.label(it) }, budgetMs = budgetMs).also { last = it }
@@ -97,13 +92,7 @@ object ScreenSession {
 
     fun element(id: Int?): UiElement? = id?.let { i -> last?.elements?.firstOrNull { it.id == i } }
 
-    /** True if [hash] is the same picture as the last one sent; otherwise remembers it. */
-    fun isDuplicateShot(hash: Long): Boolean {
-        val prev = lastShotHash
-        if (prev != null && ImageHash.distance(prev, hash) <= ImageHash.SAME_THRESHOLD) return true
-        lastShotHash = hash
-        return false
-    }
+    
 }
 
 private fun needSvc(): NyroAccessibilityService? = ScreenSession.svc()
@@ -374,8 +363,10 @@ fun screenTools(): List<Tool> = listOf(
         }
         override suspend fun run(args: Args): ToolResult {
             val svc = needSvc() ?: return noSvc()
-            val scale = if (args.str("space") == "screenshot") ScreenSession.shotScale else 1f
-            val x = args.int("x")!! / scale; val y = args.int("y")!! / scale
+            val shot = ScreenSession.shot
+            val fromShot = args.str("space") == "screenshot" && shot != null
+            val x = if (fromShot) shot!!.screenX(args.int("x")!!) else args.int("x")!!.toFloat()
+            val y = if (fromShot) shot!!.screenY(args.int("y")!!) else args.int("y")!!.toFloat()
             val dm = svc.resources.displayMetrics
             if (x < 0 || y < 0 || x > dm.widthPixels || y > dm.heightPixels) return ToolResult.fail("Point is outside the screen (${dm.widthPixels}x${dm.heightPixels}).")
             val before = ScreenSession.fresh(svc, 400).obs
@@ -442,40 +433,76 @@ fun screenTools(): List<Tool> = listOf(
 
     object : Tool(
         "take_screenshot",
-        "Capture the screen and look at it with vision. Use only when accessibility info is missing or insufficient (images, videos, games, custom-drawn UIs, visual layout questions). The image is sent to the configured Azure endpoint. An identical screen is not sent twice.",
+        "Look at the screen with vision when the accessibility tree cannot answer: images, video, games, canvas UIs, or text it did not expose. The picture is cropped to the content area, or to the element you name, and sized to stay legible; pass region=full only when the whole layout is the question.",
         touchesScreen = true, readOnly = true,
-        params = { string("question", "What you need to learn from the screenshot") },
+        params = {
+            string("question", "What you need to learn from the picture")
+            enum("region", "auto (default) crops to the content or the named element; full sends the whole screen; thumb is a cheap layout-only view", listOf("auto", "full", "thumb"), required = false)
+            int("element_id", "Crop to this element (id from the latest screen result)", required = false)
+        },
     ) {
-        override fun describe(args: Args) = "Looking at the screen (sharing screenshot with Azure)"
+        override fun describe(args: Args) = "Looking at the screen (sharing a picture with Azure)"
+
         override suspend fun run(args: Args): ToolResult {
             val g = NyroApp.graph
-            if (!g.settings.current.allowScreenshots) return ToolResult.fail("Screenshots are disabled in NYRO settings. Use read_screen instead.")
-            UiFeedback.scan()
-            val raw = captureScreen() ?: return ToolResult.fail(lastCaptureError)
-            // Numbered boxes on the elements, using the same ids as read_screen. The model picks a number
-            // instead of estimating pixel coordinates from the picture.
-            val snap = NyroAccessibilityService.current?.let { ScreenSession.fresh(it, 400) }
-            val shot = renderShot(raw, snap)
-            ScreenSession.shotScale = shot.scale
-            if (ScreenSession.isDuplicateShot(shot.hash)) {
-                return ToolResult("The screen looks identical to the screenshot you already have, so it was not sent again. Use the earlier image, or act and then look again.")
+            if (!g.settings.current.allowScreenshots) {
+                return ToolResult.fail("Screenshots are disabled in NYRO settings. Use read_screen instead.")
             }
-            Perf.count(Metric.SCREENSHOTS_SENT, 1); Perf.count(Metric.IMAGE_BYTES, shot.bytes.toLong())
-            UiFeedback.notice("Screen shared with Azure")
-            val note = "Screenshot ${shot.w}x${shot.h}. Numbered boxes mark tappable elements: act on one with tap_element using its number (the same numbers as read_screen)."
+            val snap = NyroAccessibilityService.current?.let { ScreenSession.fresh(it, 400) }
+            val question = args.str("question") ?: "Describe this screen."
+            val target = ScreenSession.element(args.int("element_id"))?.bounds
+            val decision = if (args.str("region") == "full") {
+                VisionDecision(VisionCost.Level.FULL, "you asked for the whole screen")
+            } else if (args.str("region") == "thumb") {
+                VisionDecision(VisionCost.Level.THUMB, "a cheap layout-only view, as asked")
+            } else {
+                VisionPolicy.forTool(
+                    allowed = true,
+                    question = question,
+                    elements = snap?.elements?.size ?: 0,
+                    interactive = snap?.elements?.count { it.clickable || it.editable || it.scrollable } ?: 0,
+                    target = target != null,
+                ) ?: VisionDecision(VisionCost.Level.CROP, "cropped to the content area")
+            }
+            UiFeedback.scan()
+            val shot = when (val outcome = captureShot(snap, decision.level, target)) {
+                is ShotOutcome.Failed -> return ToolResult.fail(outcome.message)
+                ShotOutcome.Duplicate -> return ToolResult(
+                    "The screen looks identical to the picture you already have, so it was not sent again. Use that one, or act and then look again."
+                )
+                is ShotOutcome.Got -> outcome.shot
+            }
+            val note = buildString {
+                append("Picture ").append(shot.width).append('x').append(shot.height)
+                append(" (").append(decision.level.label)
+                if (decision.level != VisionCost.Level.FULL) {
+                    append(", screen area ").append(shot.region.width()).append('x').append(shot.region.height())
+                }
+                append("), ").append(shot.tokens).append(" image tokens: ").append(decision.reason).append(". ")
+                append("Numbered boxes are tappable elements: tap one with tap_element using its number (the same numbers as read_screen).")
+            }
             val cfg = g.settings.current.provider
+            // A separate vision deployment costs one extra round trip, so it gets a short, capped answer.
             if (cfg.visionDeployment.isNotBlank() && cfg.visionDeployment != cfg.deployment) {
                 return try {
-                    val turn = g.ai.chat(cfg, listOf(
-                        Msg.system("You describe Android phone screenshots precisely for an automation agent. Give element positions as pixel coordinates of this image."),
-                        Msg.userWithImage(args.str("question") ?: "Describe this screen.", shot.base64)
-                    ), deployment = cfg.visionDeployment)
+                    val turn = g.ai.chat(
+                        cfg,
+                        listOf(
+                            Msg.system("You read Android phone screenshots for an automation agent. Answer briefly: only what was asked, with pixel positions of this image when asked."),
+                            Msg.userWithImage(question, shot.base64, shot.detail, shot.mime, shot.tokens),
+                        ),
+                        deployment = cfg.visionDeployment,
+                        maxTokens = 220,
+                    )
                     ToolResult("$note\nVision analysis: ${turn.content}")
-                } catch (e: Exception) { ToolResult.fail("Vision request failed: ${e.message}") }
+                } catch (e: Exception) {
+                    ToolResult.fail("Vision request failed: ${e.message}")
+                }
             }
-            return ToolResult(note, imageJpeg = shot.base64)
+            return ToolResult(note, image = ModelImage(shot.base64, shot.mime, shot.detail, shot.tokens, question))
         }
     },
+
 )
 
 private fun globalTool(name: String, desc: String, action: Int, label: String) = object : Tool(name, desc, requires = setOf(Requirement.ACCESSIBILITY), touchesScreen = true) {
@@ -488,77 +515,3 @@ private fun globalTool(name: String, desc: String, action: Int, label: String) =
         return ScreenSession.observe(svc, before, since, "$label: done.")
     }
 }
-
-@Volatile private var lastCaptureError = "Screen capture unavailable."
-
-/** Accessibility screenshot first (no extra consent, respects secure windows), MediaProjection otherwise. */
-suspend fun captureScreen(): Bitmap? = Perf.time(Metric.SHOT_CAPTURE) {
-    val svc = NyroAccessibilityService.current
-    UiFeedback.hiddenForCapture {
-        if (svc != null) {
-            when (val r = svc.screenshot()) {
-                is NyroAccessibilityService.Shot.Ok -> r.bitmap
-                is NyroAccessibilityService.Shot.Failed -> { lastCaptureError = r.reason; null }
-            }
-        } else {
-            ScreenCaptureManager.capture(NyroApp.graph.context).getOrElse { lastCaptureError = it.message ?: "Capture failed"; null }
-        }
-    }
-}
-
-/** A JPEG ready for the model, with a perceptual [hash] used to avoid sending the same picture twice. */
-data class Shot(val base64: String, val scale: Float, val w: Int, val h: Int, val bytes: Int, val hash: Long)
-
-/**
- * Scales first, then draws the numbered boxes at the reduced size, then JPEG-encodes. The old path copied the full-resolution
- * ARGB bitmap (about 10 MB on this phone), drew on that, and only then scaled it down.
- */
-fun renderShot(src: Bitmap, snap: ScreenSnapshot?, maxDim: Int = 720, quality: Int = 50): Shot = Perf.time(Metric.SHOT_ENCODE) {
-    val scale = minOf(1f, maxDim.toFloat() / maxOf(src.width, src.height))
-    val base = if (scale < 1f) Bitmap.createScaledBitmap(src, (src.width * scale).roundToInt(), (src.height * scale).roundToInt(), true) else src
-    val hash = run {
-        val t = Bitmap.createScaledBitmap(base, 8, 8, true)
-        val px = IntArray(64); t.getPixels(px, 0, 8, 0, 0, 8, 8)
-        if (t !== base) t.recycle()
-        ImageHash.average(IntArray(64) { ImageHash.gray(px[it]) })
-    }
-    val bmp = if (snap != null) annotate(base, snap, scale) else base
-    val out = ByteArrayOutputStream()
-    bmp.compress(Bitmap.CompressFormat.JPEG, quality, out)
-    val bytes = out.toByteArray()
-    val shot = Shot(Base64.encodeToString(bytes, Base64.NO_WRAP), scale, bmp.width, bmp.height, bytes.size, hash)
-    if (bmp !== base) bmp.recycle()
-    if (base !== src) base.recycle()
-    src.recycle()
-    shot
-}
-
-/** Draws numbered boxes on the tappable elements of [snap]. [scale] converts screen pixels to bitmap pixels. */
-private fun annotate(src: Bitmap, snap: ScreenSnapshot, scale: Float): Bitmap {
-    val out = src.copy(Bitmap.Config.ARGB_8888, true) ?: return src
-    val canvas = android.graphics.Canvas(out)
-    val accent = android.graphics.Color.rgb(74, 143, 224)
-    val stroke = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        style = android.graphics.Paint.Style.STROKE; strokeWidth = maxOf(1.5f, out.width / 300f); color = accent
-    }
-    val fill = android.graphics.Paint().apply { color = accent }
-    val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-        color = android.graphics.Color.WHITE; textSize = maxOf(10f, out.width / 26f); typeface = android.graphics.Typeface.DEFAULT_BOLD
-    }
-    snap.elements.filter { it.clickable || it.editable || it.scrollable }.take(120).forEach { e ->
-        val r = android.graphics.RectF(e.bounds.left * scale, e.bounds.top * scale, e.bounds.right * scale, e.bounds.bottom * scale)
-        canvas.drawRect(r, stroke)
-        val label = e.id.toString()
-        val w = text.measureText(label) + 6f
-        val h = text.textSize + 4f
-        canvas.drawRect(r.left, r.top, r.left + w, r.top + h, fill)
-        canvas.drawText(label, r.left + 3f, r.top + h - 4f, text)
-    }
-    return out
-}
-
-/** Kept for callers that already hold a Bitmap: annotate (when [snap] is given), scale and encode. */
-data class Encoded(val base64: String, val scale: Float, val w: Int, val h: Int)
-
-fun encode(src: Bitmap, maxDim: Int = 800, quality: Int = 60): Encoded =
-    renderShot(src, null, maxDim, quality).let { Encoded(it.base64, it.scale, it.w, it.h) }
