@@ -117,7 +117,8 @@ class PlanTest {
         val a = ToolRegistry().schemas.toString()
         val b = ToolRegistry().schemas.toString()
         assertEquals("tool schemas must be byte-identical between builds of the registry (prompt cache prefix)", a, b)
-        println("tool schemas: ${registry.tools.size} tools, ${a.length} chars (~${a.length / 4} tokens); run_plan+run_workflow add ${registry.get("run_plan")!!.schema().toString().length + registry.get("run_workflow")!!.schema().toString().length} chars")
+        val allChars = com.nyro.companion.tools.toolsJson(registry.tools.values).toString().length
+        println("tool schemas: ${registry.activeNames().size} of ${registry.tools.size} tools sent, ${a.length} chars (~${a.length / 4} tokens); the full library is $allChars chars (~${allChars / 4} tokens)")
         val tool = registry.get("run_plan")!!.schema().toString()
         assertTrue(tool.contains("\"steps\"") && tool.contains("\"items\"") && tool.contains("\"target\""))
     }

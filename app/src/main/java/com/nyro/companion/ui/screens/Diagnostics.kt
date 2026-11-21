@@ -15,8 +15,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.nyro.companion.NyroApp
+import com.nyro.companion.exec.VisionCost
 import com.nyro.companion.perf.Benchmark
 import com.nyro.companion.perf.Perf
 import com.nyro.companion.perf.Summary
@@ -28,6 +30,34 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private fun fmt(s: Summary) = "p50 ${s.p50} · p95 ${s.p95} · p99 ${s.p99} ms  (n=${s.n})"
+
+/**
+ * What one picture of this screen costs at each rung of the ladder, computed with the same pure maths the encoder
+ * uses, so the numbers on the phone and in the request are the same numbers.
+ */
+@Composable
+private fun VisionCostRows() {
+    val dm = LocalContext.current.resources.displayMetrics
+    val w = dm.widthPixels
+    val h = dm.heightPixels
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            "This screen is ${w}x$h. Text from the accessibility tree costs no image tokens; a picture is only sent when it is needed.",
+            color = Nyro.TextMid, style = MaterialTheme.typography.bodySmall,
+        )
+        VisionCost.Level.entries.forEach { level ->
+            val fit = VisionCost.plan(w, h, level)
+            Text(
+                "${level.label}: ${fit.width}x${fit.height} · ${fit.tokens} tokens",
+                color = Nyro.TextHi, style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        Text(
+            "Luna counts 32 px patches and bills ceil(patches x 1.2). detail=low is used for thumbnails and high otherwise; auto is never sent because luna reads it as original.",
+            color = Nyro.TextLow, style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
 
 /**
  * Developer diagnostics: rolling p50/p95/p99 for every timed stage, plus a local benchmark. Each task's own breakdown
@@ -64,6 +94,10 @@ fun DiagnosticsSection() {
             OutlinedButton(onClick = { Perf.reset() }) { Text("Clear timings") }
         }
     }
+
+    Gap(12)
+    SectionLabel("Vision cost (gpt-6-luna)")
+    GlassCard(Modifier.fillMaxWidth()) { VisionCostRows() }
 
     Gap(12)
     SectionLabel("Local benchmark")

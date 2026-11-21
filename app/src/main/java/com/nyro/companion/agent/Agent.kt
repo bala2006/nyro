@@ -28,7 +28,8 @@ import com.nyro.companion.exec.PlanStep
 import com.nyro.companion.exec.PlanValidator
 import com.nyro.companion.exec.ProgressTracker
 import com.nyro.companion.exec.ScreenChange
-import com.nyro.companion.exec.ScreenshotPolicy
+import com.nyro.companion.exec.VisionCost
+import com.nyro.companion.exec.VisionPolicy
 import com.nyro.companion.exec.ToolSpec
 import com.nyro.companion.exec.Verdict
 import com.nyro.companion.exec.WorkflowOutcome
@@ -50,8 +51,9 @@ import com.nyro.companion.tools.Risk
 import com.nyro.companion.tools.ScreenSession
 import com.nyro.companion.tools.TaskMemo
 import com.nyro.companion.tools.Tool
-import com.nyro.companion.tools.captureScreen
-import com.nyro.companion.tools.renderShot
+import com.nyro.companion.tools.ShotOutcome
+import com.nyro.companion.tools.VisionFormat
+import com.nyro.companion.tools.captureShot
 import com.nyro.companion.tools.ToolResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -141,6 +143,8 @@ class Agent(private val g: AppGraph) {
     private val clock: Clock = RealClock
     /** Remembers what was done on which screen during the current task and refuses repeats that cannot make progress. */
     private val tracker = ProgressTracker(clock)
+    /** Conversations whose background summary is being rebuilt, so two tasks never summarize at once. */
+    private val summaryInFlight: MutableSet<Long> = java.util.concurrent.ConcurrentHashMap.newKeySet()
     private val router = FastRouter({ q -> g.apps.resolve(q) }, clock)
     private val appResolver = AppResolver { name -> g.apps.find(name)?.pkg }
     private val toolSpec = ToolSpec { tool, a ->
@@ -151,10 +155,12 @@ class Agent(private val g: AppGraph) {
     @Volatile private var abortReason: String? = null
     @Volatile private var lastRisk: Risk = Risk.LOW
 
-    fun newConversation() { stop(); _conversationId.value = null; _state.value = AssistantState() }
+    fun newConversation() {
+        stop(); g.tools.resetActivated(); _conversationId.value = null; _state.value = AssistantState()
+    }
 
     fun startPrivateSession() {
-        stop(); _private.value = true; _privateMessages.value = emptyList(); _conversationId.value = PRIVATE_ID
+        stop(); g.tools.resetActivated(); _private.value = true; _privateMessages.value = emptyList(); _conversationId.value = PRIVATE_ID
         _state.value = AssistantState()
     }
 
@@ -287,15 +293,15 @@ class Agent(private val g: AppGraph) {
 
         val messages = ArrayList<JsonObject>()
         messages += Msg.system(systemPrompt())
-        conversationSummary(cid)?.takeIf { it.isNotBlank() }?.let { summary ->
+        storedSummary(cid)?.takeIf { it.isNotBlank() }?.let { summary ->
             messages += Msg.user("Summary of earlier in this conversation (for context; the newest messages follow):\n$summary")
         }
-        priorMessages(cid, 17).dropLast(1).forEach { m ->
+        priorMessages(cid, HISTORY_WINDOW).dropLast(1).forEach { m ->
             messages += if (m.role == "user") Msg.user(m.content) else Msg.assistant(m.content)
         }
         // Phone state (time, foreground app, device, memories) goes after the request, so the
         // system prompt and everything before it stays byte-identical and cacheable.
-        messages += Msg.user(text + "\n\n<phone_state>\n" + stateBlock() + "\n</phone_state>")
+        messages += Msg.user(text + "\n\n<phone_state>\n" + stateBlock(text) + "\n</phone_state>")
         val promptCacheKey = "nyro-conv-$cid"
 
         var taskId: Long? = null
@@ -323,7 +329,7 @@ class Agent(private val g: AppGraph) {
                     g.usage.onDelta(d)
                     tts.push(d)
                 }
-                // No automatic screenshot when the accessibility tree already describes the screen (see ScreenshotPolicy).
+                // No automatic screenshot when the accessibility tree already describes the screen (see VisionPolicy).
                 if (lastBatchTouchedScreen) autoScreenshot(modelCapturedLastBatch)?.let { messages += it }
                 Perf.record(Metric.PREPARE, clock.now() - prepStart)
                 val modelStart = clock.now()
@@ -332,7 +338,9 @@ class Agent(private val g: AppGraph) {
                 } catch (e: AiException) {
                     val imgs = messages.indices.filter { messages[it]["content"] is JsonArray }
                     if (e.kind != AiErrorKind.CAPABILITY && e.kind != AiErrorKind.BAD_REQUEST || imgs.isEmpty()) throw e
-                    // The deployment rejected image input: continue with accessibility data only.
+                    // The deployment rejected image input (or the image format): continue with text only, and stop
+                    // sending WebP so the next picture goes as JPEG.
+                    VisionFormat.rememberRejection()
                     imgs.forEach { messages[it] = Msg.user("[Screenshot could not be sent: this deployment does not accept images. Use read_screen instead, or configure a vision deployment.]") }
                     g.ai.chat(settings.provider, messages, g.tools.schemas, onDelta = onDelta, cacheKey = promptCacheKey)
                 }
@@ -392,7 +400,7 @@ class Agent(private val g: AppGraph) {
                     log.append("  tool ${clock.now() - toolStart} ms\n")
                     messages += Msg.tool(call.id, result.text.take(MAX_TOOL_CHARS))
                     guard.record(mutatesUi, result.ok)
-                    result.imageJpeg?.let { images += Msg.userWithImage("Screenshot for tool call ${call.id}.", it) }
+                    result.image?.let { images += Msg.userWithImage(it.caption, it.base64, it.detail, it.mime, it.tokens) }
                 }
                 lastBatchTouchedScreen = turn.toolCalls.any { c -> g.tools.get(c.name)?.let { it.touchesScreen || it.name == "open_app" } == true }
                 modelCapturedLastBatch = turn.toolCalls.any { it.name == "take_screenshot" }
@@ -436,6 +444,9 @@ class Agent(private val g: AppGraph) {
             tts.cancel()
             taskId?.let { g.dao.finishTask(it, "failed", e.message.orEmpty(), log.toString()) }
             fail(cid, "Something went wrong: ${e.javaClass.simpleName}${e.message?.let { ": $it" } ?: ""}")
+        } finally {
+            // Fold this task's older messages into the stored summary now, so the next task never waits for it.
+            scheduleSummary(cid)
         }
     }
 
@@ -692,24 +703,24 @@ class Agent(private val g: AppGraph) {
 
     /** Attaches a picture only when the tree cannot describe the screen, and never the same picture twice. Always announced. */
     private suspend fun autoScreenshot(modelCapturedThisBatch: Boolean): JsonObject? {
-        val svc = NyroAccessibilityService.current
-        val obs = ScreenSession.last?.obs
-        val input = ScreenshotPolicy.Input(
-            allowedBySettings = g.settings.current.allowScreenshots,
-            accessibilityOn = svc != null,
-            elementCount = obs?.elements?.size ?: 0,
-            interactiveCount = obs?.elements?.count { it.interactive } ?: 0,
-            modelCapturedThisBatch = modelCapturedThisBatch,
+        if (modelCapturedThisBatch) return null
+        val obs = ScreenSession.last?.obs ?: return null
+        if (NyroAccessibilityService.current == null) return null
+        val decision = VisionPolicy.forAuto(
+            allowed = g.settings.current.allowScreenshots,
+            elements = obs.elements.size,
+            interactive = obs.elements.count { it.interactive },
+        ) ?: return null
+        val shot = (captureShot(ScreenSession.last, decision.level) as? ShotOutcome.Got)?.shot ?: return null
+        return Msg.userWithImage(
+            "${decision.reason.capitalizeFirst()}. Picture ${shot.width}x${shot.height} of the screen area " +
+                "${shot.region.width()}x${shot.region.height()} (${shot.tokens} image tokens). Numbered boxes are the " +
+                "elements in the latest screen result; act on one with tap_element using its number.",
+            shot.base64, shot.detail, shot.mime, shot.tokens,
         )
-        if (obs == null || !ScreenshotPolicy.shouldAttachAutomatically(input)) return null
-        val raw = captureScreen() ?: return null
-        val shot = renderShot(raw, ScreenSession.last)
-        ScreenSession.shotScale = shot.scale
-        if (ScreenSession.isDuplicateShot(shot.hash)) return null
-        Perf.count(Metric.SCREENSHOTS_SENT, 1); Perf.count(Metric.IMAGE_BYTES, shot.bytes.toLong())
-        UiFeedback.notice("Screen shared with Azure")
-        return Msg.userWithImage("The accessibility data for this screen is empty or has no tappable elements, so here is a picture. Numbered boxes are the elements in the latest screen result. Act on a box by its number with tap_element.", shot.base64)
     }
+
+    private fun String.capitalizeFirst(): String = replaceFirstChar { it.uppercase() }
 
     private suspend fun confirm(risk: Risk, text: String): Boolean {
         val d = CompletableDeferred<Boolean>()
@@ -781,20 +792,37 @@ class Agent(private val g: AppGraph) {
         _sentLog.update { (listOf(line) + it).take(10) }
     }
 
+    /** The stored summary of earlier messages, if any. It is rebuilt in the background, never on the request path. */
+    private suspend fun storedSummary(cid: Long): String? =
+        if (cid < 0 || _private.value) null else g.dao.conversation(cid)?.summary
+
     /**
-     * Continuity for long conversations: messages older than the live window are summarized once
-     * into the conversation row, so later requests keep the goals and outcomes without resending
-     * every old message. Private sessions have no stored conversation and skip this.
+     * Rebuilds the stored summary after a task, off the critical path: the first request of a task must never pay
+     * for an extra model call. One rebuild per conversation at a time; private sessions have nothing to store.
      */
-    private suspend fun conversationSummary(cid: Long): String? {
-        if (cid < 0 || _private.value) return null
-        val conv = g.dao.conversation(cid) ?: return null
-        val windowStart = g.dao.recentMessages(cid, 17).firstOrNull()?.id ?: return conv.summary
+    private fun scheduleSummary(cid: Long) {
+        if (cid < 0 || _private.value || !summaryInFlight.add(cid)) return
+        g.scope.launch(Dispatchers.IO) {
+            try {
+                refreshSummary(cid)
+            } catch (e: CancellationException) {
+                // The app is going away; the summary is rebuilt next time.
+            } catch (e: Exception) {
+                // A summary is a cache; a failed rebuild must never surface as a task error.
+            } finally {
+                summaryInFlight.remove(cid)
+            }
+        }
+    }
+
+    private suspend fun refreshSummary(cid: Long) {
+        if (_private.value) return
+        val conv = g.dao.conversation(cid) ?: return
+        val windowStart = g.dao.recentMessages(cid, HISTORY_WINDOW).firstOrNull()?.id ?: return
         val older = g.dao.messagesBetween(cid, conv.summaryUpTo, windowStart)
-        if (older.size < 6) return conv.summary
-        val updated = runCatching { summarize(conv.summary, older) }.getOrNull() ?: return conv.summary
+        if (older.size < 6) return
+        val updated = summarize(conv.summary, older)
         g.dao.updateSummary(cid, updated, older.last().id)
-        return updated
     }
 
     private suspend fun summarize(previous: String, msgs: List<MessageEntity>): String {
@@ -861,8 +889,8 @@ class Agent(private val g: AppGraph) {
     }
 
     /** Phone state for the newest request only: changes every task, so it sits after the cached prefix. */
-    private suspend fun stateBlock(): String {
-        val memories = g.dao.memoryList(40)
+    private suspend fun stateBlock(request: String): String {
+        val memories = MemoryPick.pick(g.dao.memoryList(40).map { it.content }, request)
         val now = SimpleDateFormat("EEEE, d MMMM yyyy, HH:mm", Locale.getDefault()).format(Date())
         val fg = g.accessibility()?.foregroundPackage?.takeIf { it.isNotEmpty() }?.let { "${g.apps.label(it)} ($it)" } ?: "unknown (accessibility off or no app in front)"
         val caps = buildList {
@@ -876,8 +904,8 @@ class Agent(private val g: AppGraph) {
             lastActionLabel?.let { append("Last action: ").append(it).append('\n') }
             append("Capabilities: ").append(caps).append('\n')
             if (memories.isNotEmpty()) {
-                append("Local memory about the user:\n")
-                memories.forEach { append("- ").append(it.content).append('\n') }
+                append("Local memory about the user (most relevant to this request):\n")
+                memories.forEach { append("- ").append(it).append('\n') }
             }
         }.trimEnd()
     }
@@ -890,7 +918,7 @@ You are NYRO, a personal AI companion that lives on the user's Android phone and
 
 How you work:
 - You act through tools that run locally on the phone. Observe → act → observe. After every action, check the returned screen state to verify it worked before moving on. Never claim something happened unless a tool result confirms it.
-- For multi-step tasks: open the app (open_app finds apps by name; do not call list_apps first), read the screen, then use element ids with tap_element / type_text / scroll. Prefer element ids over coordinates. Screen results list the accessibility tree only. If the tree lacks what you need (images, video, games, canvas UIs), call take_screenshot; do not call it otherwise.
+- For multi-step tasks: open the app (open_app finds apps by name; do not call list_apps first), read the screen, then use element ids with tap_element / type_text / scroll. Prefer element ids over coordinates. Screen results list the accessibility tree only. If the tree lacks what you need (images, video, games, canvas UIs, or small text it did not expose), call take_screenshot: it sends a legible crop, and region="full" only when the whole layout matters.
 - When you can predict two or more consecutive steps from the screen you can see (for example tap Search, type the query, press enter), send them as ONE run_plan call with a label-based target and an expectation for each step. NYRO runs them locally, checks each result, and comes back to you only when something unexpected happens. Do not plan steps that depend on a screen you have not seen. Tool calls that change the screen run one per turn; use run_plan for sequences.
 - run_workflow walks a known app flow with checks (for example run_workflow duolingo_start_lesson). If it stops, continue from the screen it returns.
 - To search inside an app: tap its search control, type_text with submit=true, then confirm results appeared.
@@ -900,6 +928,7 @@ How you work:
 - Before tapping, find the target in the latest screen result and tap it by its number with tap_element. Don't tap coordinates you estimated.
 - If an action doesn't change the screen, don't repeat it. Try another element, scroll, or go back. Never re-open a screen you already opened and left; use what it showed. If a result says BLOCKED, do not try the same action again: change approach or tell the user what is blocking you.
 - Results already in this conversation stay valid: do not call list_apps, read_screen or get_* again unless the situation changed.
+- Only the core tools are loaded. If you need a capability you cannot see (files, notifications, device info, timers, alarms, volume, flashlight, clipboard, web search, settings pages, sharing, the app list), call find_tools with what you want to do; those tools appear on your next turn.
 - Work fast: don't call read_screen right after an action; action results already include the new screen.
 - If a step fails, try a sensible alternative (scroll, go back, re-read, search) up to a few times, then explain what blocked you.
 - The phone's safety layer may ask the user to confirm risky actions; if a tool returns DENIED, stop that path and ask the user.
@@ -924,6 +953,8 @@ ${instructionsBlock()}""".trim()
         /** Working budget for one task's prompt. Compaction starts at 90% of it. Tasks rarely need more, and every token is latency. */
         const val WORKING_BUDGET_TOKENS = 40_000
         const val COMPACT_AT_TOKENS = WORKING_BUDGET_TOKENS * 9 / 10
+        /** Messages of the live conversation window kept verbatim; older ones live in the stored summary. */
+        const val HISTORY_WINDOW = 9
         const val KEEP_TAIL_MESSAGES = 12
         const val MAX_SUMMARY_CHARS = 6000
     }
